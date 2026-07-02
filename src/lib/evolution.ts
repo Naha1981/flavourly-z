@@ -1,8 +1,42 @@
 // Flavourly OS — Evolution API client helper
 // Sends WhatsApp messages via the Evolution API gateway.
+//
+// ARCHITECTURE: All tenants share the single "Flavourly-os" Evolution API
+// instance (configured via EVOLUTION_INSTANCE_NAME + EVOLUTION_INSTANCE_TOKEN).
+// We do NOT create per-tenant instances via API — the global API key on this
+// Evolution deployment doesn't allow /instance/create. If you need per-tenant
+// instances, create them manually in Evolution Manager and store the token
+// on each Tenant record.
 
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
-const EVOLUTION_GLOBAL_KEY = process.env.EVOLUTION_GLOBAL_API_KEY;
+const EVOLUTION_INSTANCE_NAME = process.env.EVOLUTION_INSTANCE_NAME;
+const EVOLUTION_INSTANCE_TOKEN = process.env.EVOLUTION_INSTANCE_TOKEN;
+
+/**
+ * Get the instance name + token to use for a given tenant.
+ * Falls back to the shared Flavourly-os instance if the tenant doesn't
+ * have its own instance configured.
+ */
+export function getInstanceForTenant(tenant: {
+  whatsappInstanceId: string | null;
+  whatsappInstanceToken: string | null;
+}): EvolutionInstance | null {
+  // If tenant has its own instance + token, use it
+  if (tenant.whatsappInstanceId && tenant.whatsappInstanceToken) {
+    return {
+      instanceName: tenant.whatsappInstanceId,
+      token: tenant.whatsappInstanceToken,
+    };
+  }
+  // Fall back to the shared Flavourly-os instance
+  if (EVOLUTION_INSTANCE_NAME && EVOLUTION_INSTANCE_TOKEN) {
+    return {
+      instanceName: EVOLUTION_INSTANCE_NAME,
+      token: EVOLUTION_INSTANCE_TOKEN,
+    };
+  }
+  return null;
+}
 
 export interface EvolutionInstance {
   instanceName: string;
@@ -11,7 +45,6 @@ export interface EvolutionInstance {
 
 /**
  * Send a text message via Evolution API.
- * Uses the tenant's instance name + token (stored on the Tenant record).
  */
 export async function sendWhatsAppText(
   instanceName: string,
@@ -23,7 +56,6 @@ export async function sendWhatsAppText(
     return { success: false, error: "EVOLUTION_API_URL not configured" };
   }
 
-  // Clean the number (remove @s.whatsapp.net suffix if present)
   const cleanNumber = number.replace(/@s\.whatsapp\.net$/, "").replace(/\D/g, "");
 
   try {
@@ -38,7 +70,7 @@ export async function sendWhatsAppText(
         body: JSON.stringify({
           number: cleanNumber,
           text,
-          delay: 1200, // small delay to mimic human + avoid rate limits
+          delay: 1200,
         }),
       }
     );
@@ -57,94 +89,9 @@ export async function sendWhatsAppText(
 }
 
 /**
- * Create a new Evolution API instance for a tenant.
- * Called by the WhatsApp connect flow in Settings.
- */
-export async function createInstance(
-  instanceName: string
-): Promise<{ success: boolean; token?: string; error?: string }> {
-  if (!EVOLUTION_API_URL || !EVOLUTION_GLOBAL_KEY) {
-    return { success: false, error: "Evolution API not configured" };
-  }
-
-  // Generate a random token for this instance
-  const token = crypto.randomUUID().replace(/-/g, "").toUpperCase();
-
-  try {
-    const res = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: EVOLUTION_GLOBAL_KEY,
-      },
-      body: JSON.stringify({
-        instanceName,
-        token,
-        qrcode: true,
-        number: "",
-      }),
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    // 403/400 with "already exists" is OK — we proceed to QR fetch
-    const alreadyExists =
-      !res.ok && JSON.stringify(data).toLowerCase().includes("already");
-
-    if (!res.ok && !alreadyExists) {
-      return {
-        success: false,
-        error: `Instance creation failed: ${JSON.stringify(data).slice(0, 200)}`,
-      };
-    }
-
-    return { success: true, token };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
-}
-
-/**
- * Configure the webhook URL on an Evolution API instance.
- * This tells Evolution API to forward inbound messages to our app.
- */
-export async function setWebhook(
-  instanceName: string,
-  instanceToken: string,
-  webhookUrl: string
-): Promise<{ success: boolean; error?: string }> {
-  if (!EVOLUTION_API_URL) {
-    return { success: false, error: "EVOLUTION_API_URL not configured" };
-  }
-
-  try {
-    const res = await fetch(`${EVOLUTION_API_URL}/webhook/set/${instanceName}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: instanceToken,
-      },
-      body: JSON.stringify({
-        url: webhookUrl,
-        webhook_by_events: true,
-        events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE"],
-      }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      return { success: false, error: `HTTP ${res.status}: ${errText.slice(0, 100)}` };
-    }
-
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
-}
-
-/**
- * Fetch the QR code for an instance (for WhatsApp linking).
- * Returns base64 image data.
+ * Fetch the QR code for an existing instance (for WhatsApp linking).
+ * Does NOT create a new instance — uses getInstanceForTenant() to pick
+ * the right one.
  */
 export async function getInstanceQR(
   instanceName: string,
@@ -155,9 +102,6 @@ export async function getInstanceQR(
   }
 
   try {
-    // Small delay to let instance initialise
-    await new Promise((r) => setTimeout(r, 1500));
-
     const res = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
       headers: { apikey: instanceToken },
     });
@@ -169,11 +113,13 @@ export async function getInstanceQR(
       };
     }
 
-    const data = (await res.json()) as { base64?: string; code?: string; qrcode?: { code?: string } };
-    // Evolution API returns QR as data.base64 (may or may not include the data:image prefix)
+    const data = (await res.json()) as {
+      base64?: string;
+      code?: string;
+      qrcode?: { code?: string };
+    };
     let qrBase64 = data.base64 ?? data.qrcode?.code ?? null;
 
-    // Ensure it has the data URI prefix
     if (qrBase64 && !qrBase64.startsWith("data:")) {
       qrBase64 = `data:image/png;base64,${qrBase64}`;
     }
@@ -205,10 +151,7 @@ export async function getConnectionState(
       return { success: false, error: `HTTP ${res.status}` };
     }
 
-    const data = (await res.json()) as {
-      instance?: { state?: string };
-    };
-
+    const data = (await res.json()) as { instance?: { state?: string } };
     return {
       success: true,
       state: data.instance?.state ?? "unknown",

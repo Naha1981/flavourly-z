@@ -52,9 +52,12 @@ export async function POST(req: NextRequest) {
       { status: 403 }
     );
   }
-  if (!tenant.whatsappInstanceId) {
+  // Determine the Evolution instance to use (tenant's own, or shared Flavourly-os)
+  const { getInstanceForTenant } = await import("@/lib/evolution");
+  const instance = getInstanceForTenant(tenant);
+  if (!instance) {
     return NextResponse.json(
-      { error: "WhatsApp not connected. Go to Settings to connect." },
+      { error: "WhatsApp not configured. Contact support." },
       { status: 400 }
     );
   }
@@ -129,8 +132,8 @@ export async function POST(req: NextRequest) {
 
         const { sendWhatsAppText } = await import("@/lib/evolution");
         const result = await sendWhatsAppText(
-          tenant.whatsappInstanceId!,
-          tenant.whatsappInstanceToken!,
+          instance.instanceName,
+          instance.token,
           c.phoneNumber,
           personalised
         );
@@ -146,7 +149,7 @@ export async function POST(req: NextRequest) {
         await db.webhookEvent.create({
           data: {
             tenantId: tenant.id,
-            instanceName: tenant.whatsappInstanceId ?? "unknown",
+            instanceName: instance.instanceName,
             eventType: "message.sent",
             phoneNumber: c.phoneNumber,
             messageContent: personalised.slice(0, 200),

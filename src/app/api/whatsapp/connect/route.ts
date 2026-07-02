@@ -1,20 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenant } from "@/lib/tenant-context";
-import { toSlug } from "@/lib/flavourly";
 import { rateLimit, validateBody } from "@/lib/middleware";
 import { whatsappConnectSchema } from "@/lib/validation";
 import {
-  createInstance,
   getInstanceQR,
-  setWebhook,
   getConnectionState,
+  getInstanceForTenant,
 } from "@/lib/evolution";
 import { getAppUrl } from "@/lib/app-url";
 
-const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
-
-// POST /api/whatsapp/connect — creates/fetches an Evolution API instance + QR code
+// POST /api/whatsapp/connect — fetches QR code for WhatsApp linking.
+// Uses the shared Flavourly-os instance (or the tenant's own if configured).
+// Does NOT create new instances — see lib/evolution.ts for architecture.
 export async function POST(req: NextRequest) {
   const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
   if (limited) return limited;
@@ -28,68 +26,36 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return parsed.error;
   const forceRefresh = parsed.data?.forceRefresh === true;
 
+  // Determine which instance to use (tenant's own, or shared Flavourly-os)
+  const instance = getInstanceForTenant(tenant);
+  if (!instance) {
+    return NextResponse.json(
+      { error: "Evolution API not configured. Contact support." },
+      { status: 503 }
+    );
+  }
+
   // If already connected, check the real connection state
-  if (
-    tenant.whatsappInstanceId &&
-    tenant.whatsappInstanceToken &&
-    tenant.whatsappPhone &&
-    !forceRefresh
-  ) {
+  if (tenant.whatsappPhone && !forceRefresh) {
     const stateResult = await getConnectionState(
-      tenant.whatsappInstanceId,
-      tenant.whatsappInstanceToken
+      instance.instanceName,
+      instance.token
     );
     if (stateResult.success && stateResult.state === "open") {
       return NextResponse.json({
         alreadyConnected: true,
-        instanceName: tenant.whatsappInstanceId,
+        instanceName: instance.instanceName,
         phone: tenant.whatsappPhone,
       });
     }
     // If not open, fall through to fetch a fresh QR
   }
 
-  // Determine instance name + token
-  const instanceName =
-    tenant.whatsappInstanceId ?? `tenant_${toSlug(tenant.slug ?? tenant.name)}`;
-
-  // If tenant doesn't have a token yet, try to create the instance
-  let instanceToken = tenant.whatsappInstanceToken;
-
-  if (!instanceToken) {
-    // Create a new instance via Evolution API
-    const createResult = await createInstance(instanceName);
-    if (!createResult.success || !createResult.token) {
-      return NextResponse.json(
-        { error: createResult.error ?? "Failed to create instance" },
-        { status: 502 }
-      );
-    }
-    instanceToken = createResult.token;
-
-    // Persist instance name + token
-    await db.tenant.update({
-      where: { id: tenant.id },
-      data: {
-        whatsappInstanceId: instanceName,
-        whatsappInstanceToken: instanceToken,
-      },
-    });
-
-    // Set the webhook URL on this instance so it forwards to our app
-    const webhookUrl = `${getAppUrl()}/api/webhooks`;
-    await setWebhook(instanceName, instanceToken, webhookUrl);
-  } else if (forceRefresh) {
-    // Already has a token — just set the webhook again to make sure
-    const webhookUrl = `${getAppUrl()}/api/webhooks`;
-    await setWebhook(instanceName, instanceToken, webhookUrl);
-  }
-
   // Log the connection attempt
   await db.webhookEvent.create({
     data: {
       tenantId: tenant.id,
-      instanceName,
+      instanceName: instance.instanceName,
       eventType: "connection.update",
       messageContent: "connecting",
       status: "processed",
@@ -97,13 +63,13 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // Fetch the QR code from Evolution API
-  const qrResult = await getInstanceQR(instanceName, instanceToken);
+  // Fetch the QR code from the existing Evolution API instance
+  const qrResult = await getInstanceQR(instance.instanceName, instance.token);
   if (!qrResult.success || !qrResult.qrBase64) {
     return NextResponse.json(
       {
         error: qrResult.error ?? "Could not fetch QR — try again in a moment",
-        instanceName,
+        instanceName: instance.instanceName,
       },
       { status: 502 }
     );
@@ -111,10 +77,8 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     alreadyConnected: false,
-    instanceName,
+    instanceName: instance.instanceName,
     qrBase64: qrResult.qrBase64,
-    // The frontend polls /api/whatsapp/status; Evolution API fires a
-    // connection.update webhook when the user scans the QR.
     autoConnectAfterMs: 8000,
   });
 }

@@ -253,13 +253,18 @@ export async function POST(req: NextRequest) {
 
     // Send the reply via Evolution API
     if (reply && phone) {
-      const { sendWhatsAppText } = await import("@/lib/evolution");
-      await sendWhatsAppText(
-        tenant.whatsappInstanceId!,
-        tenant.whatsappInstanceToken!,
-        phone,
-        reply
-      );
+      const { sendWhatsAppText, getInstanceForTenant } = await import("@/lib/evolution");
+      const instance = getInstanceForTenant(tenant);
+      if (!instance) {
+        console.error("[webhook] No Evolution instance configured for tenant:", tenant.id);
+      } else {
+        await sendWhatsAppText(
+          instance.instanceName,
+          instance.token,
+          phone,
+          reply
+        );
+      }
 
       // Log the outbound reply
       await db.webhookEvent.create({
