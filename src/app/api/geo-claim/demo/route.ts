@@ -1,10 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
+import { rateLimit } from "@/lib/middleware";
 
 // POST /api/geo-claim/demo — create a fresh reward event for demo purposes
 // Returns the event id so the frontend can open /geo-claim/:id
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
 
   // pick a customer with enough points (or the first customer)

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import { Button } from "@/components/ui/button";
@@ -131,6 +132,8 @@ function ClaimContent({ ghost, onClose }: { ghost: GhostTenant; onClose: () => v
       toast.error(d.error ?? "Claim failed");
       return;
     }
+    // Auto-login the newly created account
+    await signIn("credentials", { email, password, redirect: false });
     setDone(true);
     toast.success("🎉 Dashboard claimed! Your 14-day trial has started.");
   };

@@ -2,20 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
 import { normalizeZAPhone } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { webhookSimulateSchema } from "@/lib/validation";
 
 // POST /api/webhooks/simulate — simulate an inbound WhatsApp keyword
 // Body: { keyword: "JOIN"|"BALANCE"|"REDEEM"|"STOP"|"hi", phone?: string }
 // Lets the super admin / user trigger the customer-facing flows manually
 // to see them reflected in the dashboard, activity feed, and webhooks log.
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const body = await req.json().catch(() => ({}));
-  const keyword = (body.keyword ?? "").toString().trim();
-  const phone = normalizeZAPhone(body.phone ?? "27835559999");
-
-  if (!keyword) {
-    return NextResponse.json({ error: "keyword required" }, { status: 400 });
-  }
+  const parsed = validateBody(body, webhookSimulateSchema);
+  if (!parsed.success) return parsed.error;
+  const keyword = parsed.data.keyword.toString().trim();
+  const phone = normalizeZAPhone(parsed.data.phone ?? "27835559999");
   const text = keyword.toLowerCase();
 
   // Log the inbound webhook event (as if Evolution API delivered it)

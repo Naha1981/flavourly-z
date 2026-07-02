@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict, REVENUE_PER_REDEMPTION } from "@/lib/tenant-context";
 import { buildCoachAdvice } from "@/lib/flavourly";
+import { rateLimit } from "@/lib/middleware";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // GET /api/insights — rule-based smart advisor
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const now = Date.now();
   const thirtyDaysAgo = new Date(now - 30 * 86400000);

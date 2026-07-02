@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenant } from "@/lib/tenant-context";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { billingCheckoutSchema } from "@/lib/validation";
 import crypto from "crypto";
 
 const PLANS: Record<string, { amount: string; label: string }> = {
@@ -12,16 +14,17 @@ const PLANS: Record<string, { amount: string; label: string }> = {
 // In production this builds the MD5 signature over the field-order spec.
 // Here we create a pending payment_transactions row and return a mock payload.
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenant();
   if (!tenant) {
     return NextResponse.json({ error: "No active tenant" }, { status: 404 });
   }
   const body = await req.json().catch(() => ({}));
-  const plan = body.plan;
-  if (!plan || !PLANS[plan]) {
-    return NextResponse.json({ error: "Invalid plan. Use 'starter' or 'growth'." }, { status: 400 });
-  }
-
+  const parsed = validateBody(body, billingCheckoutSchema);
+  if (!parsed.success) return parsed.error;
+  const plan = parsed.data.plan;
   const planConfig = PLANS[plan];
   const mPaymentId = crypto.randomUUID();
 

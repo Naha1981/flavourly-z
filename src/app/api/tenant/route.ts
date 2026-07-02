@@ -2,9 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenant } from "@/lib/tenant-context";
 import { INDUSTRY_CURRENCY, INDUSTRY_LABELS } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { tenantPatchSchema } from "@/lib/validation";
 
 // GET /api/tenant — active demo tenant
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenant();
   if (!tenant) {
     return NextResponse.json({ error: "No active tenant" }, { status: 404 });
@@ -29,7 +34,14 @@ export async function GET() {
 
 // PATCH /api/tenant — update business profile (settings)
 export async function PATCH(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
+
   const body = await req.json().catch(() => ({}));
+  const parsed = validateBody(body, tenantPatchSchema);
+  if (!parsed.success) return parsed.error;
+  const data0 = parsed.data;
+
   const tenant = await getActiveTenant();
   if (!tenant) {
     return NextResponse.json({ error: "No active tenant" }, { status: 404 });
@@ -43,11 +55,11 @@ export async function PATCH(req: NextRequest) {
 
   const data: Record<string, unknown> = {};
   for (const k of allowed) {
-    if (body[k] !== undefined) data[k] = body[k];
+    if (data0[k] !== undefined) data[k] = data0[k];
   }
 
-  if (body.industry && body.currencyName === undefined) {
-    data.currencyName = INDUSTRY_CURRENCY[body.industry] ?? "Points";
+  if (data0.industry && data0.currencyName === undefined) {
+    data.currencyName = INDUSTRY_CURRENCY[data0.industry] ?? "Points";
   }
 
   const updated = await db.tenant.update({

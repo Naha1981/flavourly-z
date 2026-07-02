@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
 import { churnRisk } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { customerAdjustSchema } from "@/lib/validation";
 
 // GET /api/customers/:id — detail with loyalty history
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const { id } = await params;
 
@@ -51,16 +56,17 @@ export async function GET(
 
 // PATCH /api/customers/:id — manual point adjustment (+/-)
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
-  const delta = Number(body.pointsChange);
-  const reason = body.reason ?? "manual_staff";
-  const note = body.note ?? null;
-
-  if (!Number.isFinite(delta) || delta === 0) {
-    return NextResponse.json({ error: "pointsChange must be a non-zero number" }, { status: 400 });
-  }
+  const parsed = validateBody(body, customerAdjustSchema);
+  if (!parsed.success) return parsed.error;
+  const delta = parsed.data.pointsChange;
+  const reason = parsed.data.reason ?? "manual_staff";
+  const note = parsed.data.note ?? null;
 
   const customer = await db.customer.findFirst({ where: { id, tenantId: tenant.id } });
   if (!customer) {

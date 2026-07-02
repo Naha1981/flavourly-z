@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { rateLimit } from "@/lib/middleware";
 
 // GET /api/webhooks?instance=&eventType=&status=&limit=
 export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const { searchParams } = new URL(req.url);
   const instance = searchParams.get("instance");
   const eventType = searchParams.get("eventType");
@@ -32,6 +36,9 @@ export async function GET(req: NextRequest) {
 // POST /api/webhooks — simulate an inbound webhook event (e.g. a customer texting JOIN)
 // Also acts as the receiver the real Evolution API would POST to.
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 120 });
+  if (limited) return limited;
+
   const body = await req.json().catch(() => ({}));
   const event = body.event as string | undefined;
   const instanceName =

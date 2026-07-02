@@ -2,14 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
 import { churnRisk, normalizeZAPhone } from "@/lib/flavourly";
+import { rateLimit, validateBody, validateQuery } from "@/lib/middleware";
+import { customerCreateSchema, customersQuerySchema } from "@/lib/validation";
 
 // GET /api/customers?filter=all|active|at_risk|vip|new&q=&sort=
 export async function GET(req: NextRequest) {
-  const tenant = await getActiveTenantStrict();
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const { searchParams } = new URL(req.url);
-  const filter = searchParams.get("filter") ?? "all";
-  const q = searchParams.get("q")?.trim() ?? "";
-  const sort = searchParams.get("sort") ?? "recent";
+  const qParsed = validateQuery(searchParams, customersQuerySchema);
+  if (!qParsed.success) return qParsed.error;
+  const filter = qParsed.data.filter ?? "all";
+  const q = qParsed.data.q?.trim() ?? "";
+  const sort = qParsed.data.sort ?? "recent";
+
+  const tenant = await getActiveTenantStrict();
 
   const now = Date.now();
   const thirtyDaysAgo = new Date(now - 30 * 86400000);
@@ -77,10 +85,15 @@ export async function GET(req: NextRequest) {
 
 // POST /api/customers — manually add a customer (sends mock WhatsApp welcome)
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const body = await req.json().catch(() => ({}));
-  const phone = normalizeZAPhone(body.phoneNumber ?? "");
-  const name = (body.name ?? "").trim() || null;
+  const parsed = validateBody(body, customerCreateSchema);
+  if (!parsed.success) return parsed.error;
+  const phone = normalizeZAPhone(parsed.data.phoneNumber ?? "");
+  const name = (parsed.data.name ?? "").trim() || null;
 
   if (!phone) {
     return NextResponse.json({ error: "Phone number required" }, { status: 400 });

@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { haversineMeters } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { geoClaimVerifySchema } from "@/lib/validation";
 
 // GET /api/geo-claim/:id — reward event + tenant details
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 120 });
+  if (limited) return limited;
+
   const { id } = await params;
   const event = await db.rewardEvent.findUnique({
     where: { id },
@@ -54,13 +59,15 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 120 });
+  if (limited) return limited;
+
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
-  const lat = Number(body.lat);
-  const lng = Number(body.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return NextResponse.json({ error: "Location required" }, { status: 400 });
-  }
+  const parsed = validateBody(body, geoClaimVerifySchema);
+  if (!parsed.success) return parsed.error;
+  const lat = parsed.data.lat;
+  const lng = parsed.data.lng;
 
   const event = await db.rewardEvent.findUnique({
     where: { id },

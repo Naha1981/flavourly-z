@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard, SectionHeading, EmptyState } from "@/components/flavourly/primitives";
+import { RealtimeActivityFeed } from "@/components/flavourly/realtime-activity-feed";
 import { waMeUrl, formatPhone, timeAgo } from "@/lib/flavourly";
 import { Download, Copy, ExternalLink, RefreshCw, AlertTriangle, Users, Gift, Footprints } from "lucide-react";
 
@@ -205,45 +206,8 @@ export function DashboardView({ tenant }: { tenant: Tenant | null }) {
         </div>
       </div>
 
-      {/* Live activity feed */}
-      <div>
-        <SectionHeading
-          emoji="🔴"
-          title="Live Activity"
-          subtitle="What your customers are doing right now"
-        />
-        <Card className="overflow-hidden">
-          {loading ? (
-            <div className="p-4 space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 rounded-lg" />
-              ))}
-            </div>
-          ) : activity.length === 0 ? (
-            <EmptyState
-              emoji="🦗"
-              title="Quiet for now"
-              message="Share your QR code or send a promo to get customers joining and earning."
-            />
-          ) : (
-            <ul className="divide-y divide-border max-h-[28rem] overflow-y-auto scroll-area-thin">
-              {activity.map((a) => (
-                <li
-                  key={a.id}
-                  className="flex items-center gap-3 px-4 py-3 feed-item-enter"
-                >
-                  <span className="text-xl shrink-0">{a.emoji}</span>
-                  <div className="flex-1 min-w-0 text-sm">
-                    <span className="font-semibold">{a.customerName ?? "Someone"}</span>{" "}
-                    <span className="text-muted-foreground">{a.message}</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground shrink-0">{a.timeAgo}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
+      {/* Live activity feed (realtime via WebSocket) */}
+      <RealtimeActivityFeed tenantId={tenant.id} />
 
       {/* Quick audience snapshot */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

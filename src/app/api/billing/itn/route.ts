@@ -1,19 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { billingItnSchema } from "@/lib/validation";
 import crypto from "crypto";
 
 // POST /api/billing/itn — mock PayFast Instant Transaction Notification
 // In production PayFast posts here with the 4-check security spec.
 // For the demo, the frontend calls this directly to simulate a successful payment.
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  const mPaymentId = body.m_payment_id;
-  const pfPaymentId = body.pf_payment_id ?? `pf-${Date.now()}`;
-  const payfastToken = body.token ?? `tok-${Math.random().toString(36).slice(2)}`;
+  const limited = rateLimit(req, { windowMs: 60_000, max: 120 });
+  if (limited) return limited;
 
-  if (!mPaymentId) {
-    return NextResponse.json({ error: "m_payment_id required" }, { status: 400 });
-  }
+  const body = await req.json().catch(() => ({}));
+  const parsed = validateBody(body, billingItnSchema);
+  if (!parsed.success) return parsed.error;
+  const mPaymentId = parsed.data.m_payment_id;
+  const pfPaymentId = parsed.data.pf_payment_id ?? `pf-${Date.now()}`;
+  const payfastToken = parsed.data.token ?? `tok-${Math.random().toString(36).slice(2)}`;
 
   const tx = await db.paymentTransaction.findUnique({
     where: { mPaymentId },

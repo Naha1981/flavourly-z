@@ -1,9 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
+import { rateLimit } from "@/lib/middleware";
 
 // GET /api/stats — dashboard headline stats + today's counts
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const now = new Date();
   const startOfToday = new Date(now);

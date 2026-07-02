@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { INDUSTRY_CURRENCY, INDUSTRY_LABELS, normalizeZAPhone, toSlug } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { prospectIngestSchema } from "@/lib/validation";
 
 // GET /api/prospects
 export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const { searchParams } = new URL(req.url);
   const status = searchParams.get("status");
   const industry = searchParams.get("industry");
@@ -35,13 +40,14 @@ export async function GET(req: NextRequest) {
 // POST /api/prospects — bulk ingest (replaces CSV upload server-side parsing for demo)
 // Body: { industry, rows: [{ businessName, ownerName?, phoneNumber, location? }] }
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  const industry = (body.industry ?? "restaurant").toString().toLowerCase();
-  const rows: Array<Record<string, string>> = Array.isArray(body.rows) ? body.rows : [];
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
 
-  if (!rows.length) {
-    return NextResponse.json({ error: "No rows provided" }, { status: 400 });
-  }
+  const body = await req.json().catch(() => ({}));
+  const parsed = validateBody(body, prospectIngestSchema);
+  if (!parsed.success) return parsed.error;
+  const industry = parsed.data.industry;
+  const rows = parsed.data.rows;
 
   const currencyName = INDUSTRY_CURRENCY[industry] ?? "Points";
   let created = 0;
@@ -49,9 +55,9 @@ export async function POST(req: NextRequest) {
   const errors: string[] = [];
 
   for (const row of rows) {
-    const businessName = (row.businessName ?? row.business_name ?? "").trim();
-    const ownerName = (row.ownerName ?? row.owner_name ?? "").trim() || null;
-    const phone = normalizeZAPhone(row.phoneNumber ?? row.phone_number ?? "");
+    const businessName = (row.businessName ?? "").trim();
+    const ownerName = (row.ownerName ?? "").trim() || null;
+    const phone = normalizeZAPhone(row.phoneNumber ?? "");
     const location = (row.location ?? "").trim() || null;
 
     if (!businessName || !phone) {

@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
+import { rateLimit } from "@/lib/middleware";
 
 // POST /api/campaigns/:id/run-again — duplicate a past campaign as a new draft→send
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const { id } = await params;
 

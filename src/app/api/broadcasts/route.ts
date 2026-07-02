@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { substituteVars, INDUSTRY_LABELS } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { broadcastCreateSchema } from "@/lib/validation";
 
 // GET /api/broadcasts — broadcast history log
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const logs = await db.broadcastLog.findMany({
     orderBy: { createdAt: "desc" },
     include: { recipients: { select: { tenantId: true, delivered: true } } },
@@ -22,13 +27,14 @@ export async function GET() {
 // POST /api/broadcasts — send platform broadcast to active tenants filtered by industry
 // Body: { industryFilter, messageTemplate }
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  const industryFilter = (body.industryFilter ?? "all").toString();
-  const messageTemplate = (body.messageTemplate ?? "").toString();
+  const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
 
-  if (!messageTemplate.trim()) {
-    return NextResponse.json({ error: "messageTemplate required" }, { status: 400 });
-  }
+  const body = await req.json().catch(() => ({}));
+  const parsed = validateBody(body, broadcastCreateSchema);
+  if (!parsed.success) return parsed.error;
+  const industryFilter = parsed.data.industryFilter;
+  const messageTemplate = parsed.data.messageTemplate;
 
   const where: Record<string, unknown> = {
     subscriptionStatus: { in: ["trial", "active"] },

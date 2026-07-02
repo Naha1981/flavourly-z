@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toSlug } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { prospectInviteSchema } from "@/lib/validation";
 
 // POST /api/prospects/invite — send WhatsApp invites to selected prospects (mock)
 // Body: { prospectIds: string[] }
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
+
   const body = await req.json().catch(() => ({}));
-  const ids: string[] = Array.isArray(body.prospectIds) ? body.prospectIds : [];
-  if (!ids.length) {
-    return NextResponse.json({ error: "prospectIds required" }, { status: 400 });
-  }
+  const parsed = validateBody(body, prospectInviteSchema);
+  if (!parsed.success) return parsed.error;
+  const ids = parsed.data.prospectIds;
 
   let sent = 0;
   let failed = 0;

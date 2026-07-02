@@ -1,9 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenant } from "@/lib/tenant-context";
+import { rateLimit } from "@/lib/middleware";
 
 // GET /api/whatsapp/status — current connection state
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenant();
   if (!tenant) {
     return NextResponse.json({ error: "No active tenant" }, { status: 404 });
@@ -21,7 +25,10 @@ export async function GET() {
 // POST /api/whatsapp/status — simulate the "open" event arriving from Evolution API
 // (In production this happens via the webhook. Here the frontend polls connect, then
 // calls this to flip the tenant to connected after the QR has been shown.)
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenant();
   if (!tenant) {
     return NextResponse.json({ error: "No active tenant" }, { status: 404 });

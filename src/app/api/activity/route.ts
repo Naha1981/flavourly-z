@@ -2,9 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
 import { timeAgo } from "@/lib/flavourly";
+import { rateLimit } from "@/lib/middleware";
 
 // GET /api/activity?limit=20
 export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const { searchParams } = new URL(req.url);
   const limit = Math.min(50, Number(searchParams.get("limit") ?? 20));

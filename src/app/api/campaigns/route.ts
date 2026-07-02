@@ -2,9 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenantStrict } from "@/lib/tenant-context";
 import { substituteVars } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { campaignCreateSchema } from "@/lib/validation";
 
 // GET /api/campaigns — list for active tenant
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const campaigns = await db.campaign.findMany({
     where: { tenantId: tenant.id },
@@ -32,13 +37,14 @@ export async function GET() {
 
 // POST /api/campaigns — create AND send in one go (mock Evolution API send)
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenantStrict();
   const body = await req.json().catch(() => ({}));
-  const { title, goal, message, audience } = body;
-
-  if (!title || !message || !audience) {
-    return NextResponse.json({ error: "title, message, audience required" }, { status: 400 });
-  }
+  const parsed = validateBody(body, campaignCreateSchema);
+  if (!parsed.success) return parsed.error;
+  const { title, goal, message, audience } = parsed.data;
 
   if (tenant.subscriptionStatus === "unclaimed" || tenant.subscriptionStatus === "cancelled") {
     return NextResponse.json(

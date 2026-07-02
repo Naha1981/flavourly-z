@@ -49,6 +49,34 @@ model Tenant {
   paymentTransactions    PaymentTransaction[]
   broadcastRecipients    BroadcastRecipient[]
   prospect               Prospect?
+  profiles               Profile[]
+}
+
+// ─── Auth: Users (credentials provider) ──────────────────────────────────────
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  profiles     Profile[]
+}
+
+// ─── Auth: Profiles (links users to tenants + roles) ─────────────────────────
+model Profile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  tenantId  String?
+  role      String   @default("owner") // super_admin | owner
+  fullName  String?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
 }
 
 // ─── Customers (end-users on WhatsApp) ───────────────────────────────────────

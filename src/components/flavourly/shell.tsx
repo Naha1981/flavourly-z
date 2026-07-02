@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSession, signOut } from "next-auth/react";
 import { useFlavourly } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
@@ -15,6 +16,8 @@ import {
   QrCode,
   MapPin,
   FlaskConical,
+  LogOut,
+  ChevronDown,
 } from "lucide-react";
 
 interface ShellProps {
@@ -58,6 +61,9 @@ export function Shell({ tenant, onRefreshTenant, children }: ShellProps) {
 
   const clickTimesRef = useRef<number[]>([]);
   const [showDemoMenu, setShowDemoMenu] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const { data: session, status } = useSession();
+  const { openAuth, openLegal } = useFlavourly();
 
   const handleLogoClick = () => {
     const now = Date.now();
@@ -152,12 +158,69 @@ export function Shell({ tenant, onRefreshTenant, children }: ShellProps) {
                 <ArrowLeft className="w-3.5 h-3.5" /> Back to Dashboard
               </button>
             )}
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold"
-              style={{ background: "var(--brand)" }}
-            >
-              {mode === "admin" ? "👑" : (tenant?.name?.[0] ?? "M")}
-            </div>
+
+            {/* Auth controls */}
+            {status === "loading" ? (
+              <div className="w-8 h-8 rounded-full bg-muted animate-pulse" />
+            ) : session?.user ? (
+              <div className="relative">
+                <button
+                  onClick={() => setShowUserMenu((s) => !s)}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-accent transition-colors"
+                >
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
+                    style={{ background: "var(--brand)" }}
+                  >
+                    {session.user.role === "super_admin" ? "👑" : (session.user.name?.[0] ?? tenant?.name?.[0] ?? "M")}
+                  </div>
+                  <ChevronDown className="w-3 h-3 text-muted-foreground hidden sm:block" />
+                </button>
+                {showUserMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+                    <div className="absolute right-0 top-10 z-50 w-56 bg-popover border border-border rounded-xl shadow-lg p-2 text-sm">
+                      <div className="px-3 py-2 border-b border-border mb-1">
+                        <div className="font-semibold truncate">{session.user.name ?? "User"}</div>
+                        <div className="text-xs text-muted-foreground truncate">{session.user.email}</div>
+                        {session.user.role === "super_admin" && (
+                          <span className="inline-block mt-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-brand-light text-brand">SUPER ADMIN</span>
+                        )}
+                      </div>
+                      {session.user.role === "super_admin" && mode === "tenant" && (
+                        <button
+                          onClick={() => { setShowUserMenu(false); setMode("admin"); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent flex items-center gap-2"
+                        >
+                          <Shield className="w-4 h-4" /> Super Admin
+                        </button>
+                      )}
+                      <button
+                        onClick={() => { setShowUserMenu(false); signOut({ callbackUrl: "/" }); }}
+                        className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent flex items-center gap-2 text-error"
+                      >
+                        <LogOut className="w-4 h-4" /> Sign Out
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => openAuth("login")}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-accent transition-colors hidden sm:block"
+                >
+                  Log in
+                </button>
+                <button
+                  onClick={() => openAuth("signup")}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark transition-colors"
+                >
+                  Sign up
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -305,7 +368,10 @@ export function Shell({ tenant, onRefreshTenant, children }: ShellProps) {
           <div className="flex items-center gap-3">
             <span>🇿🇦 Built for Southern African SMEs</span>
             <span className="hidden sm:inline">·</span>
-            <span>POPIA compliant · Opt out any time with STOP</span>
+            <button onClick={() => openLegal("privacy")} className="hover:text-foreground transition-colors underline-offset-2 hover:underline">Privacy</button>
+            <button onClick={() => openLegal("terms")} className="hover:text-foreground transition-colors underline-offset-2 hover:underline">Terms</button>
+            <span className="hidden sm:inline">·</span>
+            <span>Opt out any time with STOP</span>
           </div>
         </div>
       </footer>

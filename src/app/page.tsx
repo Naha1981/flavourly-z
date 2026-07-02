@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Shell } from "@/components/flavourly/shell";
+import { ErrorBoundary } from "@/components/flavourly/error-boundary";
 import { DashboardView } from "@/components/flavourly/views/dashboard-view";
 import { CustomersView } from "@/components/flavourly/views/customers-view";
 import { PromosView } from "@/components/flavourly/views/promos-view";
@@ -12,6 +14,8 @@ import { AdminBroadcasts } from "@/components/flavourly/views/admin-broadcasts";
 import { AdminWebhooks } from "@/components/flavourly/views/admin-webhooks";
 import { ClaimOverlay } from "@/components/flavourly/overlays/claim-overlay";
 import { GeoClaimOverlay } from "@/components/flavourly/overlays/geo-claim-overlay";
+import { AuthOverlay } from "@/components/flavourly/overlays/auth-overlay";
+import { LegalOverlay } from "@/components/flavourly/overlays/legal-overlay";
 import { useFlavourly } from "@/lib/store";
 
 interface Tenant {
@@ -43,7 +47,8 @@ interface Tenant {
 }
 
 export default function Home() {
-  const { mode, tenantView, adminView, publicOverlay } = useFlavourly();
+  const { mode, tenantView, adminView, publicOverlay, authOverlay, legalOverlay } = useFlavourly();
+  const { data: session } = useSession();
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -68,8 +73,20 @@ export default function Home() {
     };
   }, []);
 
+  // Reload tenant when auth state changes (login/logout)
+  const authed = !!session?.user;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/tenant");
+      if (cancelled) return;
+      if (res.ok) setTenant(await res.json());
+    })();
+    return () => { cancelled = true; };
+  }, [authed]);
+
   return (
-    <>
+    <ErrorBoundary>
       <Shell tenant={tenant} onRefreshTenant={refreshTenant}>
         {loading ? (
           <div className="p-6 text-muted-foreground">Loading your dashboard…</div>
@@ -92,9 +109,11 @@ export default function Home() {
         )}
       </Shell>
 
-      {/* Public overlays (full-screen, no shell) */}
+      {/* Overlays */}
       {publicOverlay === "claim" && <ClaimOverlay />}
       {publicOverlay === "geo-claim" && <GeoClaimOverlay tenantName={tenant?.name} />}
-    </>
+      {authOverlay && <AuthOverlay onAuthed={refreshTenant} />}
+      {legalOverlay && <LegalOverlay />}
+    </ErrorBoundary>
   );
 }

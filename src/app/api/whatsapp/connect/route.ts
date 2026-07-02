@@ -2,17 +2,24 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveTenant } from "@/lib/tenant-context";
 import { toSlug } from "@/lib/flavourly";
+import { rateLimit, validateBody } from "@/lib/middleware";
+import { whatsappConnectSchema } from "@/lib/validation";
 
 // POST /api/whatsapp/connect — mock Evolution API instance creation + QR
 // In production this calls Evolution API /instance/create and /instance/connect.
 // Here we generate a deterministic fake QR (SVG data URL) and auto-connect after polling.
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
+
   const tenant = await getActiveTenant();
   if (!tenant) {
     return NextResponse.json({ error: "No active tenant" }, { status: 404 });
   }
   const body = await req.json().catch(() => ({}));
-  const forceRefresh = body?.forceRefresh === true;
+  const parsed = validateBody(body, whatsappConnectSchema);
+  if (!parsed.success) return parsed.error;
+  const forceRefresh = parsed.data?.forceRefresh === true;
 
   // If already connected and not forcing refresh, short-circuit
   if (
