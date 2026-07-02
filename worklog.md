@@ -592,3 +592,20 @@ Stage Summary:
 - WhatsApp connect 401 FIXED. The app now uses the existing Flavourly-os instance for all tenants instead of trying to create new ones.
 - Full onboarding flow works: signup → business profile → WhatsApp QR → loyalty QR → dashboard.
 - Pushed to GitHub.
+
+---
+Task ID: 11
+Agent: Lead (Z.ai Code)
+Task: Add "Change WhatsApp Number" feature for business owners.
+
+Work Log:
+- lib/evolution.ts: added logoutInstance() — calls DELETE /instance/logout/{instanceName} on Evolution API to disconnect the current WhatsApp session. Returns success on 404/400 (already logged out).
+- api/whatsapp/connect: added forceNewNumber option. When true: (1) calls logoutInstance() to disconnect old session, (2) clears tenant.whatsappPhone + whatsappConnectedAt in DB, (3) logs disconnect event, (4) fetches fresh QR from existing instance.
+- settings-view.tsx WhatsApp tab: replaced "Reconnect / Get Fresh QR" button with "Change WhatsApp Number" button. Opens a confirmation dialog showing the current number + warning that customers can't text JOIN until re-scan. On "Yes, Change Number": calls startConnect(true, true) which posts {forceNewNumber: true}. After response: sets qrData, calls onUpdated() to refresh tenant (so connected banner hides), starts polling for new connection.
+- Connected banner + "Connection Healthy" card now hide when qrData is set (so the QR is visible after change-number).
+- Verified end-to-end via Agent Browser: Mike logged in → Settings → WhatsApp → "Change WhatsApp Number" → confirmation dialog → "Yes, Change Number" → POST /api/whatsapp/connect 200 → old number disconnected (DB phone = null) → fresh QR appeared → connected banner hidden. ✅
+- Restored Mike's demo connection after testing.
+- Pushed to GitHub.
+
+Stage Summary:
+- Business owners can now change their WhatsApp number at any time from Settings → WhatsApp → "Change WhatsApp Number". The old number is disconnected, a fresh QR is generated, and the user scans with their new number to reconnect.
