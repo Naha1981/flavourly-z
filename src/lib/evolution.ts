@@ -134,6 +134,9 @@ export async function getInstanceQR(
  * Logout / disconnect the current WhatsApp session on an instance.
  * This frees the instance so a new QR can be generated for a different number.
  * Used by the "Change WhatsApp Number" feature in Settings.
+ *
+ * Evolution API v2.3.7 uses DELETE for /instance/logout.
+ * Returns 400 "not connected" if already logged out — we treat that as success.
  */
 export async function logoutInstance(
   instanceName: string,
@@ -151,7 +154,7 @@ export async function logoutInstance(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      // 404/400 likely means already logged out — treat as success
+      // 400 "not connected" or 404 means already logged out — treat as success
       if (res.status === 404 || res.status === 400) {
         return { success: true };
       }
@@ -161,6 +164,19 @@ export async function logoutInstance(
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Warm up the Evolution API (Render free tier cold starts can take 30-60s).
+ * Call this before any other Evolution API request to avoid timeouts.
+ */
+export async function warmUpEvolutionApi(): Promise<void> {
+  if (!EVOLUTION_API_URL) return;
+  try {
+    await fetch(EVOLUTION_API_URL, { method: "GET", signal: AbortSignal.timeout(10000) });
+  } catch {
+    // ignore — the warm-up is best-effort
   }
 }
 

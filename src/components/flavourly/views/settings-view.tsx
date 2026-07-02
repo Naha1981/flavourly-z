@@ -467,34 +467,14 @@ function WhatsAppTab({
   const startConnect = useCallback(
     async (forceRefresh = false, forceNewNumber = false) => {
       setConnecting(true);
+      setConnectingLabel(forceNewNumber ? "Disconnecting & generating QR…" : "Generating QR…");
       try {
-        // If changing numbers, disconnect FIRST (separate fast request),
-        // then fetch the QR (second request). This avoids a single long
-        // request that times out on Vercel (Evolution API cold starts).
-        if (forceNewNumber) {
-          setConnectingLabel("Disconnecting old number…");
-          const discRes = await fetch("/api/whatsapp/disconnect", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          });
-          if (!discRes.ok) {
-            const d = await discRes.json().catch(() => ({}));
-            toast.error("Could not disconnect", {
-              description: d.error ?? "Please try again.",
-            });
-            setConnecting(false);
-            setConnectingLabel("");
-            return;
-          }
-          // Refresh tenant so connected banner hides
-          onUpdated();
-          setConnectingLabel("Generating new QR…");
-        }
-
+        // Single API call — the server handles logout + delay + QR fetch.
+        // A warm-up ping is sent first to avoid Evolution API cold-start timeouts.
         const res = await fetch("/api/whatsapp/connect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ forceRefresh }),
+          body: JSON.stringify({ forceRefresh, forceNewNumber }),
         });
         const j = await res.json();
         if (j.alreadyConnected && !forceRefresh && !forceNewNumber) {
@@ -508,7 +488,7 @@ function WhatsAppTab({
         }
         if (!j.qrBase64) {
           toast.error("Couldn't generate QR", {
-            description: j.error ?? "Please try again in a moment.",
+            description: j.error ?? "The WhatsApp server may be warming up. Please try again in a moment.",
           });
           setConnecting(false);
           setConnectingLabel("");
@@ -524,6 +504,11 @@ function WhatsAppTab({
             : "Open WhatsApp → Settings → Linked Devices → Scan.",
         });
 
+        // If we changed numbers, refresh tenant so connected banner hides
+        if (forceNewNumber) {
+          onUpdated();
+        }
+
         // Poll every 4s — the user must actually scan the QR.
         cleanup();
         setPolling(true);
@@ -532,7 +517,7 @@ function WhatsAppTab({
         }, 4000);
       } catch {
         toast.error("Couldn't generate QR", {
-          description: "The WhatsApp server took too long. Please try again.",
+          description: "The WhatsApp server took too long to respond. Please try again.",
         });
         setConnecting(false);
         setConnectingLabel("");
