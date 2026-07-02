@@ -426,6 +426,7 @@ function WhatsAppTab({
     tenant.whatsappInstanceId
   );
   const [connecting, setConnecting] = useState(false);
+  const [connectingLabel, setConnectingLabel] = useState("");
   const [polling, setPolling] = useState(false);
   const [showChangeNumberConfirm, setShowChangeNumberConfirm] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -467,10 +468,33 @@ function WhatsAppTab({
     async (forceRefresh = false, forceNewNumber = false) => {
       setConnecting(true);
       try {
+        // If changing numbers, disconnect FIRST (separate fast request),
+        // then fetch the QR (second request). This avoids a single long
+        // request that times out on Vercel (Evolution API cold starts).
+        if (forceNewNumber) {
+          setConnectingLabel("Disconnecting old number…");
+          const discRes = await fetch("/api/whatsapp/disconnect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          if (!discRes.ok) {
+            const d = await discRes.json().catch(() => ({}));
+            toast.error("Could not disconnect", {
+              description: d.error ?? "Please try again.",
+            });
+            setConnecting(false);
+            setConnectingLabel("");
+            return;
+          }
+          // Refresh tenant so connected banner hides
+          onUpdated();
+          setConnectingLabel("Generating new QR…");
+        }
+
         const res = await fetch("/api/whatsapp/connect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ forceRefresh, forceNewNumber }),
+          body: JSON.stringify({ forceRefresh }),
         });
         const j = await res.json();
         if (j.alreadyConnected && !forceRefresh && !forceNewNumber) {
@@ -478,25 +502,29 @@ function WhatsAppTab({
             description: `WhatsApp is linked to ${formatPhone(j.phone)}.`,
           });
           setConnecting(false);
+          setConnectingLabel("");
           onUpdated();
+          return;
+        }
+        if (!j.qrBase64) {
+          toast.error("Couldn't generate QR", {
+            description: j.error ?? "Please try again in a moment.",
+          });
+          setConnecting(false);
+          setConnectingLabel("");
           return;
         }
         setQrData(j.qrBase64);
         setInstanceName(j.instanceName);
+        setConnecting(false);
+        setConnectingLabel("");
         toast.info(forceNewNumber ? "🔄 New QR ready" : "📲 QR ready", {
           description: forceNewNumber
             ? "Old number disconnected. Scan with your NEW WhatsApp number."
             : "Open WhatsApp → Settings → Linked Devices → Scan.",
         });
 
-        // If we changed numbers, refresh the tenant so the connected banner hides
-        if (forceNewNumber) {
-          onUpdated();
-        }
-
         // Poll every 4s — the user must actually scan the QR.
-        // No auto-connect timer: POST /api/whatsapp/status checks the real
-        // Evolution API state and only flips to connected when actually "open".
         cleanup();
         setPolling(true);
         pollRef.current = setInterval(() => {
@@ -504,9 +532,10 @@ function WhatsAppTab({
         }, 4000);
       } catch {
         toast.error("Couldn't generate QR", {
-          description: "Please try again.",
+          description: "The WhatsApp server took too long. Please try again.",
         });
         setConnecting(false);
+        setConnectingLabel("");
       }
     },
     [checkStatus, cleanup, onUpdated]
@@ -556,7 +585,7 @@ function WhatsAppTab({
 
       {/* Connect / QR card */}
       <Card className="p-5 sm:p-6">
-        {!connected && !qrData && (
+        {!qrData && !connected && (
           <div className="text-center py-6">
             <div className="text-5xl mb-3">💬</div>
             <h3 className="text-lg font-bold mb-1">Connect Your WhatsApp</h3>
@@ -583,7 +612,7 @@ function WhatsAppTab({
           </div>
         )}
 
-        {!connected && qrData && (
+        {qrData && (
           <div className="space-y-4">
             <div className="text-center">
               <h3 className="text-lg font-bold flex items-center justify-center gap-2">
@@ -689,7 +718,7 @@ function WhatsAppTab({
                   }}
                 >
                   {connecting ? (
-                    <><RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> Disconnecting…</>
+                    <><RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> {connectingLabel || "Working…"}</>
                   ) : (
                     "Yes, Change Number"
                   )}
