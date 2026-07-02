@@ -2,16 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { z } from "zod";
+import { INDUSTRY_CURRENCY, toSlug } from "@/lib/flavourly";
 
 const signupSchema = z.object({
   email: z.string().email("Enter a valid email"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   fullName: z.string().min(1, "Your name is required").max(80),
+  // New business signup fields
+  businessName: z.string().min(1, "Business name is required").max(100).optional(),
+  industry: z
+    .enum(["restaurant", "cafe", "carwash", "salon", "barber", "retail"])
+    .optional(),
   // Optional: link to an existing (ghost) tenant via claim token
   claimToken: z.string().optional(),
 });
 
-// POST /api/auth/signup — create a User + Profile, optionally claim a ghost tenant
+// POST /api/auth/signup — create a User + Profile + Tenant, start trial
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const parsed = signupSchema.safeParse(body);
@@ -22,7 +28,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { email, password, fullName, claimToken } = parsed.data;
+  const { email, password, fullName, businessName, industry, claimToken } =
+    parsed.data;
   const emailLower = email.toLowerCase().trim();
 
   // Check for existing user
@@ -35,9 +42,12 @@ export async function POST(req: NextRequest) {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const trialEndsAt = new Date();
+  trialEndsAt.setDate(trialEndsAt.getDate() + 14);
 
-  // If claimToken provided, verify and claim the ghost tenant
   let tenantId: string | null = null;
+
+  // ── Case 1: claimToken provided → claim a ghost tenant ────────────────────
   if (claimToken) {
     const tenant = await db.tenant.findUnique({ where: { claimToken } });
     if (!tenant || tenant.subscriptionStatus !== "unclaimed") {
@@ -46,8 +56,6 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14);
     const updated = await db.tenant.update({
       where: { id: tenant.id },
       data: {
@@ -59,6 +67,30 @@ export async function POST(req: NextRequest) {
       },
     });
     tenantId = updated.id;
+  } else if (businessName && industry) {
+    // ── Case 2: new business signup → create a fresh tenant ──────────────────
+    const currencyName = INDUSTRY_CURRENCY[industry] ?? "Points";
+    let slug = toSlug(businessName);
+    // Ensure slug uniqueness
+    const existing = await db.tenant.findUnique({ where: { slug } });
+    if (existing) {
+      slug = `${slug}-${Math.random().toString(36).slice(2, 6)}`;
+    }
+    const tenant = await db.tenant.create({
+      data: {
+        name: businessName,
+        slug,
+        industry,
+        currencyName,
+        subscriptionStatus: "trial",
+        plan: "starter",
+        trialEndsAt,
+        ownerName: fullName,
+        ownerEmail: emailLower,
+        onboardingCompleted: false,
+      },
+    });
+    tenantId = tenant.id;
   }
 
   // Create User + Profile in a transaction
@@ -70,7 +102,7 @@ export async function POST(req: NextRequest) {
       profiles: {
         create: {
           fullName,
-          role: claimToken ? "owner" : "owner",
+          role: "owner",
           tenantId,
         },
       },
@@ -83,8 +115,11 @@ export async function POST(req: NextRequest) {
     userId: user.id,
     email: user.email,
     tenantId,
-    message: claimToken
-      ? "Dashboard claimed! Your 14-day free trial has started."
-      : "Account created. You can now log in.",
+    message:
+      claimToken
+        ? "Dashboard claimed! Your 14-day free trial has started."
+        : businessName
+        ? "Account created! Let's set up your business."
+        : "Account created. You can now log in.",
   });
 }

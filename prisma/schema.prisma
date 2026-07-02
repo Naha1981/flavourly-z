@@ -36,6 +36,7 @@ model Tenant {
   // Public claim flow (prospect onboarding)
   claimToken             String                @unique @default(cuid())
   claimedAt              DateTime?
+  onboardingCompleted    Boolean               @default(false)
   ownerName              String?
   ownerEmail             String?
   createdAt              DateTime              @default(now())

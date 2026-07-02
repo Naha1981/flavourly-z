@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
+import { toast } from "sonner";
 import { useFlavourly } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
@@ -70,7 +71,16 @@ export function Shell({ tenant, onRefreshTenant, children }: ShellProps) {
     clickTimesRef.current = clickTimesRef.current.filter((t) => now - t < 400);
     clickTimesRef.current.push(now);
     if (clickTimesRef.current.length >= 2) {
-      setMode(mode === "admin" ? "tenant" : "admin");
+      // Super admin access: only allow if logged in as super_admin
+      if (session?.user?.role === "super_admin") {
+        setMode(mode === "admin" ? "tenant" : "admin");
+      } else if (!session?.user) {
+        // Not logged in — prompt login
+        openAuth("login");
+        toast.info("Log in as Super Admin to access that area.");
+      } else {
+        toast.error("Super Admin access required.");
+      }
       clickTimesRef.current = [];
     }
   };

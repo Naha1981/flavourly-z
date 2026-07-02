@@ -2,37 +2,26 @@ import { db } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
-// Session-aware tenant resolution:
-// 1. If a NextAuth session exists → use the session's tenantId.
-// 2. If no session (demo / preview mode) → fall back to the first connected
-//    trial/active tenant (Mike's Car Wash in the seed). This keeps the demo
-//    working without forcing login. In production, add middleware to enforce
-//    authentication and remove the fallback.
+// Session-aware tenant resolution.
+// REQUIRES an authenticated NextAuth session — no demo fallback.
+// Returns the tenant linked to the logged-in user's profile.
+// Throws if no session (callers should let this surface as 401).
 export async function getActiveTenant() {
-  // Try session first
   try {
     const session = await getServerSession(authOptions);
-    if (session?.user?.tenantId) {
-      const tenant = await db.tenant.findUnique({
-        where: { id: session.user.tenantId },
-      });
-      if (tenant && tenant.subscriptionStatus !== "unclaimed") {
-        return tenant;
-      }
-    }
+    if (!session?.user?.id) return null;
+    const profile = await db.profile.findUnique({
+      where: { userId: session.user.id },
+    });
+    if (!profile?.tenantId) return null;
+    const tenant = await db.tenant.findUnique({
+      where: { id: profile.tenantId },
+    });
+    if (!tenant || tenant.subscriptionStatus === "unclaimed") return null;
+    return tenant;
   } catch {
-    // Session not available (e.g. during build) — fall through to demo
+    return null;
   }
-
-  // Dev fallback: first connected tenant
-  const tenant = await db.tenant.findFirst({
-    where: {
-      subscriptionStatus: { in: ["trial", "active", "paused"] },
-      whatsappInstanceId: { not: null },
-    },
-    orderBy: { createdAt: "asc" },
-  });
-  return tenant;
 }
 
 export async function getActiveTenantStrict() {
@@ -46,6 +35,16 @@ export async function getCurrentRole(): Promise<string | null> {
   try {
     const session = await getServerSession(authOptions);
     return session?.user?.role ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Returns the current session's user id or null.
+export async function getCurrentUserId(): Promise<string | null> {
+  try {
+    const session = await getServerSession(authOptions);
+    return session?.user?.id ?? null;
   } catch {
     return null;
   }

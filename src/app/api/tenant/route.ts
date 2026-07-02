@@ -50,7 +50,7 @@ export async function PATCH(req: NextRequest) {
   const allowed = [
     "name", "industry", "currencyName", "brandColor", "logoUrl",
     "welcomePoints", "rewardThreshold", "locationLabel", "locationLat", "locationLng",
-    "ownerName", "ownerEmail",
+    "ownerName", "ownerEmail", "onboardingCompleted",
   ] as const;
 
   const data: Record<string, unknown> = {};

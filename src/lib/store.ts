@@ -16,6 +16,7 @@ export type Mode = "tenant" | "admin";
 export type PublicOverlay = null | "claim" | "geo-claim" | "welcome";
 export type AuthOverlay = null | "login" | "signup";
 export type LegalOverlay = null | "privacy" | "terms";
+export type AppOverlay = null | "onboarding";
 
 interface FlavourlyState {
   // Navigation
@@ -25,6 +26,7 @@ interface FlavourlyState {
   publicOverlay: PublicOverlay;
   authOverlay: AuthOverlay;
   legalOverlay: LegalOverlay;
+  appOverlay: AppOverlay;
 
   // Context
   activeTenantId: string | null;
@@ -42,6 +44,8 @@ interface FlavourlyState {
   closeAuth: () => void;
   openLegal: (o: LegalOverlay) => void;
   closeLegal: () => void;
+  openApp: (o: AppOverlay) => void;
+  closeApp: () => void;
   setActiveTenant: (id: string | null) => void;
   reset: () => void;
 }
@@ -53,6 +57,7 @@ export const useFlavourly = create<FlavourlyState>((set) => ({
   publicOverlay: null,
   authOverlay: null,
   legalOverlay: null,
+  appOverlay: null,
   activeTenantId: null,
   claimToken: null,
   geoClaimEventId: null,
@@ -71,6 +76,8 @@ export const useFlavourly = create<FlavourlyState>((set) => ({
   closeAuth: () => set({ authOverlay: null }),
   openLegal: (o) => set({ legalOverlay: o }),
   closeLegal: () => set({ legalOverlay: null }),
+  openApp: (o) => set({ appOverlay: o }),
+  closeApp: () => set({ appOverlay: null }),
   setActiveTenant: (id) => set({ activeTenantId: id }),
   reset: () =>
     set({
@@ -80,5 +87,6 @@ export const useFlavourly = create<FlavourlyState>((set) => ({
       publicOverlay: null,
       authOverlay: null,
       legalOverlay: null,
+      appOverlay: null,
     }),
 }));

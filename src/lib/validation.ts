@@ -19,6 +19,7 @@ export const tenantPatchSchema = z.object({
   locationLng: z.number().min(-180).max(180).optional(),
   ownerName: z.string().max(100).optional(),
   ownerEmail: z.string().email().optional(),
+  onboardingCompleted: z.boolean().optional(),
 });
 
 // Customers

@@ -14,7 +14,7 @@ export function AuthOverlay({ onAuthed }: { onAuthed: () => void }) {
   if (!authOverlay) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[100] overflow-y-auto flex items-start sm:items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <button
         onClick={closeAuth}
         className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white hover:bg-white/30 flex items-center justify-center transition-colors"
@@ -121,6 +121,8 @@ function SignupForm({ onAuthed, onSwitch }: { onAuthed: () => void; onSwitch: ()
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [industry, setIndustry] = useState("");
   const [loading, setLoading] = useState(false);
   const { closeAuth } = useFlavourly();
 
@@ -134,7 +136,7 @@ function SignupForm({ onAuthed, onSwitch }: { onAuthed: () => void; onSwitch: ()
     const res = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fullName, email, password }),
+      body: JSON.stringify({ fullName, email, password, businessName, industry }),
     });
     setLoading(false);
     if (!res.ok) {
@@ -175,6 +177,35 @@ function SignupForm({ onAuthed, onSwitch }: { onAuthed: () => void; onSwitch: ()
             className="mt-1"
             required
           />
+        </div>
+        <div>
+          <Label htmlFor="signup-business" className="text-xs font-semibold">Business Name</Label>
+          <Input
+            id="signup-business"
+            value={businessName}
+            onChange={(e) => setBusinessName(e.target.value)}
+            placeholder="e.g. Sipho's Car Wash"
+            className="mt-1"
+            required
+          />
+        </div>
+        <div>
+          <Label htmlFor="signup-industry" className="text-xs font-semibold">Industry</Label>
+          <select
+            id="signup-industry"
+            value={industry}
+            onChange={(e) => setIndustry(e.target.value)}
+            required
+            className="mt-1 w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="">Select your industry…</option>
+            <option value="restaurant">🍽️ Restaurant</option>
+            <option value="cafe">☕ Café</option>
+            <option value="carwash">🚗 Car Wash</option>
+            <option value="salon">💅 Salon</option>
+            <option value="barber">💈 Barber</option>
+            <option value="retail">🛍️ Retail</option>
+          </select>
         </div>
         <div>
           <Label htmlFor="signup-email" className="text-xs font-semibold">Email</Label>
