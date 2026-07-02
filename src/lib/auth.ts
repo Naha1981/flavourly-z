@@ -86,5 +86,7 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  // Fallback secret for when NEXTAUTH_SECRET env var isn't set yet.
+  // In production, ALWAYS set NEXTAUTH_SECRET in Vercel env vars.
+  secret: process.env.NEXTAUTH_SECRET || "flavourly-dev-fallback-secret-change-me-in-production",
 };
