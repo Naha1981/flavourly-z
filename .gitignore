@@ -62,3 +62,4 @@ screenshot-*.png
 # Agent context
 agent-ctx/
 tool-results/
+upload/
