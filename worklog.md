@@ -386,3 +386,26 @@ Stage Summary:
   5. ✅ Error boundaries + loading states (React error boundary, route-level error.tsx, branded loading.tsx)
 - Demo credentials: mike@mikescarwash.co.za / demo1234 (tenant owner) · admin@flavourly.os / demo1234 (super admin)
 - Remaining for go-live: real Evolution API + PayFast credentials, Postgres migration, middleware auth enforcement, email provider for password reset.
+
+---
+Task ID: 5
+Agent: Lead (Z.ai Code)
+Task: Migrate to Supabase Postgres (production database).
+
+Work Log:
+- User provided Supabase credentials: Project URL, publishable/anon key, secret/service_role key, JWKS URL, and two connection strings (transaction pooler :6543 + session pooler :5432) with [YOUR-PASSWORD] placeholder.
+- User provided database password: 2008@slyTnaha (URL-encoded @ as %40 for connection string).
+- Stored all credentials in .env (gitignored, never committed).
+- Updated prisma/schema.prisma: provider sqlite -> postgresql, added directUrl for migrations.
+- Discovered shell had stale DATABASE_URL env var (pointing to old SQLite file) overriding .env. Fixed by unsetting shell var.
+- Ran db:push -> all 11 tables created in Supabase Postgres.
+- Original seed.ts (designed for fast local SQLite) timed out on remote Postgres due to individual insert queries. Created seed-fast.ts using createMany batch inserts.
+- Seeded all data: 11 tenants (Mike's + Mama Nomsa's claimed + 9 ghost), 40 customers, 86 loyalty transactions, 5 campaigns, 8 activities, 5 webhook events, 10 prospects, 2 auth users (Mike + Super Admin), 8 reward events, 1 broadcast log.
+- Verified via API: GET /api/tenant returns Mike's Car Wash with 40 customers from Supabase.
+- Verified via Agent Browser: login as mike@mikescarwash.co.za / demo1234 -> "👋 Welcome back!" -> header shows "Mike's Car Wash | Trial · 6d left" with avatar M (logged in).
+- Committed Postgres migration to GitHub.
+
+Stage Summary:
+- App is now running on production Supabase Postgres. All data persists in the cloud.
+- Demo credentials work: mike@mikescarwash.co.za / demo1234 (tenant), admin@flavourly.os / demo1234 (super admin).
+- Remaining for full production: Evolution API (WhatsApp), PayFast (billing), auth middleware enforcement, email provider for password reset.
