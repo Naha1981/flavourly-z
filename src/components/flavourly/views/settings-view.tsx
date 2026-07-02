@@ -427,6 +427,7 @@ function WhatsAppTab({
   );
   const [connecting, setConnecting] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [showChangeNumberConfirm, setShowChangeNumberConfirm] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -463,16 +464,16 @@ function WhatsAppTab({
   }, [cleanup, onUpdated]);
 
   const startConnect = useCallback(
-    async (forceRefresh = false) => {
+    async (forceRefresh = false, forceNewNumber = false) => {
       setConnecting(true);
       try {
         const res = await fetch("/api/whatsapp/connect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ forceRefresh }),
+          body: JSON.stringify({ forceRefresh, forceNewNumber }),
         });
         const j = await res.json();
-        if (j.alreadyConnected && !forceRefresh) {
+        if (j.alreadyConnected && !forceRefresh && !forceNewNumber) {
           toast.success("✅ Already connected!", {
             description: `WhatsApp is linked to ${formatPhone(j.phone)}.`,
           });
@@ -482,9 +483,16 @@ function WhatsAppTab({
         }
         setQrData(j.qrBase64);
         setInstanceName(j.instanceName);
-        toast.info("📲 QR ready", {
-          description: "Open WhatsApp → Settings → Linked Devices → Scan.",
+        toast.info(forceNewNumber ? "🔄 New QR ready" : "📲 QR ready", {
+          description: forceNewNumber
+            ? "Old number disconnected. Scan with your NEW WhatsApp number."
+            : "Open WhatsApp → Settings → Linked Devices → Scan.",
         });
+
+        // If we changed numbers, refresh the tenant so the connected banner hides
+        if (forceNewNumber) {
+          onUpdated();
+        }
 
         // Poll every 4s — the user must actually scan the QR.
         // No auto-connect timer: POST /api/whatsapp/status checks the real
@@ -506,8 +514,8 @@ function WhatsAppTab({
 
   return (
     <div className="space-y-4">
-      {/* Status banner */}
-      {connected ? (
+      {/* Status banner — hidden when showing a QR (e.g. after Change Number) */}
+      {connected && !qrData ? (
         <Card className="p-5 border-success/30 bg-success-light/50">
           <div className="flex items-start gap-3">
             <CheckCircle2 className="w-6 h-6 text-success-foreground shrink-0 mt-0.5" />
@@ -622,7 +630,7 @@ function WhatsAppTab({
           </div>
         )}
 
-        {connected && (
+        {connected && !qrData && (
           <div className="space-y-3">
             <div className="flex items-start gap-3">
               <span className="text-2xl shrink-0">🟢</span>
@@ -630,26 +638,64 @@ function WhatsAppTab({
                 <h3 className="font-bold">Connection Healthy</h3>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   Your WhatsApp instance is linked and receiving customer messages.
-                  Need to switch phones or troubleshoot? Generate a fresh QR below —
-                  your customer data is never affected.
+                  Need to switch phones? Generate a new QR below — your customer
+                  data is never affected.
                 </p>
               </div>
             </div>
             <Button
               variant="outline"
-              onClick={() => startConnect(true)}
+              onClick={() => setShowChangeNumberConfirm(true)}
               disabled={connecting}
             >
-              {connecting ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> Reconnecting…
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-1.5" /> Reconnect / Get Fresh QR
-                </>
-              )}
+              <RefreshCw className="w-4 h-4 mr-1.5" /> Change WhatsApp Number
             </Button>
+          </div>
+        )}
+
+        {/* Change Number confirmation dialog */}
+        {showChangeNumberConfirm && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+              <div className="text-center mb-4">
+                <div className="text-4xl mb-2">🔄</div>
+                <h3 className="text-lg font-bold">Change WhatsApp Number?</h3>
+                <p className="text-sm text-muted-foreground mt-2">
+                  This will disconnect your current number (
+                  <strong className="font-mono">{formatPhone(tenant.whatsappPhone!)}</strong>)
+                  and generate a fresh QR code. You&apos;ll scan it with your new
+                  WhatsApp number to reconnect.
+                </p>
+                <p className="text-xs text-muted-foreground mt-3 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                  ⚠️ Until you scan the new QR, customers won&apos;t be able to text
+                  JOIN or receive replies. Your customer data is safe.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setShowChangeNumberConfirm(false)}
+                  disabled={connecting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  className="flex-1 bg-brand hover:bg-brand-dark text-white"
+                  disabled={connecting}
+                  onClick={() => {
+                    setShowChangeNumberConfirm(false);
+                    startConnect(true, true);
+                  }}
+                >
+                  {connecting ? (
+                    <><RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> Disconnecting…</>
+                  ) : (
+                    "Yes, Change Number"
+                  )}
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </Card>

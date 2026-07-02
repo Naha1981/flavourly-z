@@ -131,6 +131,40 @@ export async function getInstanceQR(
 }
 
 /**
+ * Logout / disconnect the current WhatsApp session on an instance.
+ * This frees the instance so a new QR can be generated for a different number.
+ * Used by the "Change WhatsApp Number" feature in Settings.
+ */
+export async function logoutInstance(
+  instanceName: string,
+  instanceToken: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!EVOLUTION_API_URL) {
+    return { success: false, error: "EVOLUTION_API_URL not configured" };
+  }
+
+  try {
+    const res = await fetch(`${EVOLUTION_API_URL}/instance/logout/${instanceName}`, {
+      method: "DELETE",
+      headers: { apikey: instanceToken },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      // 404/400 likely means already logged out — treat as success
+      if (res.status === 404 || res.status === 400) {
+        return { success: true };
+      }
+      return { success: false, error: `HTTP ${res.status}: ${errText.slice(0, 100)}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
  * Check the connection state of an instance.
  */
 export async function getConnectionState(
