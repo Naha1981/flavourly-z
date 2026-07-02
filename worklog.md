@@ -409,3 +409,31 @@ Stage Summary:
 - App is now running on production Supabase Postgres. All data persists in the cloud.
 - Demo credentials work: mike@mikescarwash.co.za / demo1234 (tenant), admin@flavourly.os / demo1234 (super admin).
 - Remaining for full production: Evolution API (WhatsApp), PayFast (billing), auth middleware enforcement, email provider for password reset.
+
+---
+Task ID: 6
+Agent: Lead (Z.ai Code)
+Task: Make app deployable on Vercel.
+
+Work Log:
+- next.config.ts: removed `output: "standalone"` (Vercel handles output), added `outputFileTracingIncludes` for Prisma client bundling, added `eslint: { ignoreDuringBuilds: true }`.
+- package.json: renamed to "flavourly-os" v1.0.0, added `postinstall: "prisma generate"` (Vercel auto-runs this), fixed `build` script to `prisma generate && next build`, fixed `start` script to `next start`, added `seed` script.
+- vercel.json: Vercel config with framework=nextjs, buildCommand, installCommand, env var mapping, 60s function timeout for API routes.
+- .vercelignore: excludes mini-services/, db/, logs, screenshots, agent-ctx, worklog.md, prisma/seed.ts from Vercel deployment.
+- src/lib/app-url.ts: auto-detects VERCEL_URL for webhook callbacks (falls back to APP_URL then localhost).
+- Updated webhook handler, whatsapp connect, prospect invite to use getAppUrl() instead of hardcoded APP_URL.
+- src/hooks/use-realtime.ts: graceful REST polling fallback — tries WebSocket for 3.5s, if fails falls back to polling /api/activity every 15s (Vercel can't run the WebSocket mini-service).
+- realtime-activity-feed.tsx: badge shows "Live" (WebSocket), "Live · Polling" (REST fallback), or "Disconnected".
+- .env.example: updated with Vercel deployment notes.
+- DEPLOYMENT.md: comprehensive step-by-step Vercel deployment guide (import repo, add env vars, deploy, test, update Evolution webhook, connect WhatsApp). Replaced actual secrets with placeholders to pass GitHub secret scanner.
+- Lint: 0 errors. Dev server: running clean. API verified: tenant data + WhatsApp QR both flow from Supabase + Evolution API.
+- Pushed to GitHub (had to amend commit to remove secrets from DEPLOYMENT.md — GitHub secret scanner blocked initial push).
+
+Stage Summary:
+- App is now fully Vercel-deployable. User needs to:
+  1. Go to vercel.com → Import `flavourly-z` repo
+  2. Add all env vars from their .env file (DEPLOYMENT.md has the full list)
+  3. Deploy
+  4. Set NEXTAUTH_URL to the Vercel URL
+  5. Update Evolution API webhook to https://[vercel-url]/api/webhooks
+- WebSocket realtime falls back to 15s REST polling on Vercel (badge shows "Live · Polling").
