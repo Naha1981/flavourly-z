@@ -73,8 +73,8 @@ export function DashboardView({ tenant }: { tenant: Tenant | null }) {
 
   if (!tenant) return <Skeleton className="m-4 h-96" />;
 
-  const joinPhone = tenant.whatsappPhone ?? "27835550001";
-  const waLink = waMeUrl(joinPhone, "JOIN");
+  const joinPhone = tenant.whatsappPhone;
+  const waLink = waMeUrl(joinPhone ?? "", "JOIN");
   const notConnected = !tenant.whatsappPhone;
 
   return (

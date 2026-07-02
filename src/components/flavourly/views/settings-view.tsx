@@ -486,22 +486,14 @@ function WhatsAppTab({
           description: "Open WhatsApp → Settings → Linked Devices → Scan.",
         });
 
-        // Poll every 4s
+        // Poll every 4s — the user must actually scan the QR.
+        // No auto-connect timer: POST /api/whatsapp/status checks the real
+        // Evolution API state and only flips to connected when actually "open".
         cleanup();
         setPolling(true);
         pollRef.current = setInterval(() => {
           void checkStatus();
         }, 4000);
-
-        // Auto-flip after autoConnectAfterMs (simulating the 'open' webhook)
-        autoTimerRef.current = setTimeout(async () => {
-          try {
-            await fetch("/api/whatsapp/status", { method: "POST" });
-          } catch {
-            // ignore
-          }
-          await checkStatus();
-        }, j.autoConnectAfterMs ?? 8000);
       } catch {
         toast.error("Couldn't generate QR", {
           description: "Please try again.",

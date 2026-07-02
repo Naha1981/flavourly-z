@@ -228,23 +228,10 @@ export function OnboardingOverlay({
         }
       }, 4000);
 
-      // Auto-connect fallback after autoConnectAfterMs (simulates "open" event)
-      const delay = data.autoConnectAfterMs ?? 8000;
-      if (autoConnectRef.current) clearTimeout(autoConnectRef.current);
-      autoConnectRef.current = setTimeout(async () => {
-        try {
-          const r = await fetch("/api/whatsapp/status", { method: "POST" });
-          if (r.ok) {
-            const d = await r.json();
-            setWaStatus("connected");
-            setWaPhone(d.phone);
-            if (pollRef.current) clearInterval(pollRef.current);
-            toast.success("📱 WhatsApp connected!");
-          }
-        } catch {
-          /* swallow */
-        }
-      }, delay);
+      // No auto-connect timer — the user MUST actually scan the QR code.
+      // The POST /api/whatsapp/status endpoint checks the real Evolution API
+      // connection state and only returns connected:true when the instance
+      // is actually "open" (scanned). The polling loop above handles detection.
     } catch {
       toast.error("Network error — please try again");
       setWaStatus("disconnected");
@@ -281,7 +268,7 @@ export function OnboardingOverlay({
   };
 
   // Phone used for the Step 3 QR — fall back to demo number if not connected
-  const phoneForQr = waPhone ?? tenant.whatsappPhone ?? "27835550001";
+  const phoneForQr = waPhone ?? tenant.whatsappPhone ?? null;
   const joinLink = waMeUrl(phoneForQr, "JOIN");
 
   return (
