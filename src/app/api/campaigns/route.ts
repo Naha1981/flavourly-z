@@ -109,30 +109,71 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // Simulate batch sending (we send to all immediately in this demo,
-  // but log a webhook event per message to show the Evolution API trail).
+  // Send via Evolution API in batches (10 per batch, 3s delay between batches)
+  const BATCH_SIZE = 10;
+  const BATCH_DELAY = 3000;
   let sent = 0;
-  for (const c of customers) {
-    const personalised = substituteVars(message, {
-      customer_name: c.name ?? "there",
-      business_name: tenant.name,
-      currency_name: tenant.currencyName,
+  let failed = 0;
+
+  for (let i = 0; i < customers.length; i += BATCH_SIZE) {
+    const batch = customers.slice(i, i + BATCH_SIZE);
+
+    // Send all messages in this batch in parallel
+    await Promise.all(
+      batch.map(async (c) => {
+        const personalised = substituteVars(message, {
+          customer_name: c.name ?? "there",
+          business_name: tenant.name,
+          currency_name: tenant.currencyName,
+        });
+
+        const { sendWhatsAppText } = await import("@/lib/evolution");
+        const result = await sendWhatsAppText(
+          tenant.whatsappInstanceId!,
+          tenant.whatsappInstanceToken!,
+          c.phoneNumber,
+          personalised
+        );
+
+        if (result.success) {
+          sent++;
+        } else {
+          failed++;
+          console.error(`[campaign] Failed to send to ${c.phoneNumber}:`, result.error);
+        }
+
+        // Log each send as a webhook event
+        await db.webhookEvent.create({
+          data: {
+            tenantId: tenant.id,
+            instanceName: tenant.whatsappInstanceId ?? "unknown",
+            eventType: "message.sent",
+            phoneNumber: c.phoneNumber,
+            messageContent: personalised.slice(0, 200),
+            status: result.success ? "processed" : "error",
+            rawPayload: JSON.stringify({
+              direction: "outbound",
+              campaignId: campaign.id,
+              error: result.error,
+            }),
+          },
+        });
+      })
+    );
+
+    // Update progress
+    await db.campaign.update({
+      where: { id: campaign.id },
+      data: { sentCount: sent },
     });
-    await db.webhookEvent.create({
-      data: {
-        tenantId: tenant.id,
-        instanceName: tenant.whatsappInstanceId ?? "unknown",
-        eventType: "message.sent",
-        phoneNumber: c.phoneNumber,
-        messageContent: personalised.slice(0, 200),
-        status: "processed",
-        rawPayload: JSON.stringify({ direction: "outbound", campaignId: campaign.id }),
-      },
-    });
-    sent++;
+
+    // Rate-limit delay between batches (skip after last batch)
+    if (i + BATCH_SIZE < customers.length) {
+      await new Promise((r) => setTimeout(r, BATCH_DELAY));
+    }
   }
 
-  // Simulate some redemptions for high-engagement audiences (deterministic-ish)
+  // Simulate some redemptions for high-engagement audiences
   const simulatedRedemptions = Math.max(
     0,
     Math.round(customers.length * (audience === "vip" ? 0.4 : audience === "inactive" ? 0.22 : 0.18))

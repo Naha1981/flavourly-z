@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { toSlug } from "@/lib/flavourly";
 import { rateLimit, validateBody } from "@/lib/middleware";
 import { prospectInviteSchema } from "@/lib/validation";
+import { sendWhatsAppText } from "@/lib/evolution";
 
-// POST /api/prospects/invite — send WhatsApp invites to selected prospects (mock)
+const EVOLUTION_INSTANCE_NAME = process.env.EVOLUTION_INSTANCE_NAME;
+const EVOLUTION_INSTANCE_TOKEN = process.env.EVOLUTION_INSTANCE_TOKEN;
+const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
+
+// POST /api/prospects/invite — send WhatsApp invites to selected prospects
+// via the Flavourly-os (MITMAK) Evolution API instance.
 // Body: { prospectIds: string[] }
 export async function POST(req: NextRequest) {
   const limited = rateLimit(req, { windowMs: 60_000, max: 10 });
@@ -14,6 +19,13 @@ export async function POST(req: NextRequest) {
   const parsed = validateBody(body, prospectInviteSchema);
   if (!parsed.success) return parsed.error;
   const ids = parsed.data.prospectIds;
+
+  if (!EVOLUTION_INSTANCE_NAME || !EVOLUTION_INSTANCE_TOKEN) {
+    return NextResponse.json(
+      { error: "Evolution API instance not configured" },
+      { status: 503 }
+    );
+  }
 
   let sent = 0;
   let failed = 0;
@@ -29,7 +41,7 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    const claimUrl = `/claim/${prospect.tenant.claimToken}`;
+    const claimUrl = `${APP_URL}/claim/${prospect.tenant.claimToken}`;
     const ownerName = prospect.ownerName ?? "there";
     const message =
       `Hi ${ownerName} 👋\n\n` +
@@ -38,24 +50,44 @@ export async function POST(req: NextRequest) {
       `See your ready-made dashboard here:\n👉 ${claimUrl}\n\n` +
       `Start turning your walk-ins into regulars today 🚀`;
 
-    // Log the outbound invite as a webhook event (mock MITMAK send)
+    // Send via the Flavourly-os Evolution API instance
+    const result = await sendWhatsAppText(
+      EVOLUTION_INSTANCE_NAME,
+      EVOLUTION_INSTANCE_TOKEN,
+      prospect.phoneNumber,
+      message
+    );
+
+    // Log the outbound invite
     await db.webhookEvent.create({
       data: {
         tenantId: prospect.tenant.id,
-        instanceName: "MITMAK",
+        instanceName: EVOLUTION_INSTANCE_NAME,
         eventType: "message.sent",
         phoneNumber: prospect.phoneNumber,
         messageContent: message.slice(0, 200),
-        status: "processed",
-        rawPayload: JSON.stringify({ direction: "outbound_invite", prospectId: pid }),
+        status: result.success ? "processed" : "error",
+        rawPayload: JSON.stringify({
+          direction: "outbound_invite",
+          prospectId: pid,
+          error: result.error,
+        }),
       },
     });
 
-    await db.prospect.update({
-      where: { id: pid },
-      data: { status: "invited", inviteSentAt: new Date() },
-    });
-    sent++;
+    if (result.success) {
+      await db.prospect.update({
+        where: { id: pid },
+        data: { status: "invited", inviteSentAt: new Date() },
+      });
+      sent++;
+    } else {
+      failed++;
+      errors.push(`${prospect.businessName}: ${result.error}`);
+    }
+
+    // Small delay between each send to avoid WhatsApp rate limits
+    await new Promise((r) => setTimeout(r, 1500));
   }
 
   return NextResponse.json({ sent, failed, errors });

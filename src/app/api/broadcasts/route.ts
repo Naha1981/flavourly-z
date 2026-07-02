@@ -52,27 +52,58 @@ export async function POST(req: NextRequest) {
   }
 
   let sent = 0;
+  let failed = 0;
   const recipients: { tenantId: string; delivered: boolean }[] = [];
 
+  const EVOLUTION_INSTANCE_NAME = process.env.EVOLUTION_INSTANCE_NAME;
+  const EVOLUTION_INSTANCE_TOKEN = process.env.EVOLUTION_INSTANCE_TOKEN;
+
+  if (!EVOLUTION_INSTANCE_NAME || !EVOLUTION_INSTANCE_TOKEN) {
+    return NextResponse.json(
+      { error: "Evolution API instance not configured" },
+      { status: 503 }
+    );
+  }
+
   for (const t of tenants) {
+    if (!t.whatsappPhone) { failed++; continue; }
+
     const message = substituteVars(messageTemplate, {
       business_name: t.name,
       owner_name: t.ownerName ?? "there",
       currency_name: t.currencyName,
     });
+
+    // Send via the Flavourly-os Evolution API instance
+    const { sendWhatsAppText } = await import("@/lib/evolution");
+    const result = await sendWhatsAppText(
+      EVOLUTION_INSTANCE_NAME,
+      EVOLUTION_INSTANCE_TOKEN,
+      t.whatsappPhone,
+      message
+    );
+
     await db.webhookEvent.create({
       data: {
         tenantId: t.id,
-        instanceName: "MITMAK",
+        instanceName: EVOLUTION_INSTANCE_NAME,
         eventType: "message.sent",
         phoneNumber: t.whatsappPhone,
         messageContent: message.slice(0, 200),
-        status: "processed",
-        rawPayload: JSON.stringify({ direction: "broadcast", industryFilter }),
+        status: result.success ? "processed" : "error",
+        rawPayload: JSON.stringify({ direction: "broadcast", industryFilter, error: result.error }),
       },
     });
-    sent++;
-    recipients.push({ tenantId: t.id, delivered: true });
+
+    if (result.success) {
+      sent++;
+      recipients.push({ tenantId: t.id, delivered: true });
+    } else {
+      failed++;
+      recipients.push({ tenantId: t.id, delivered: false });
+    }
+
+    await new Promise((r) => setTimeout(r, 1000));
   }
 
   const log = await db.broadcastLog.create({
@@ -88,7 +119,7 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     sent,
-    failed: 0,
+    failed,
     total: tenants.length,
     logId: log.id,
     industryLabel: industryFilter === "all" ? "All Industries" : INDUSTRY_LABELS[industryFilter] ?? industryFilter,
