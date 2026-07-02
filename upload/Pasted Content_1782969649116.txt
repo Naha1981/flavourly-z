@@ -1,0 +1,939 @@
+### Step 7.3 — Configure MITMAK Webhook in Evolution Manager
+
+1. Log into Evolution Manager at `https://bankbook-whatsapp-my-evolution-api.onrender.com/manager`
+2. Select the **MITMAK** instance → Settings → Webhooks
+3. Set Webhook URL: `https://[YOUR_SUPABASE_PROJECT_ID].supabase.co/functions/v1/evolution-webhook`
+4. Enable events: `MESSAGES_UPSERT`, `CONNECTION_UPDATE`
+5. Enable: **Webhook by Events** toggle
+6. Confirm MITMAK is **Connected** (green status)
+
+### Step 7.4 — Implement `evolution-webhook` Edge Function
+
+Key parsing logic — Evolution API payload fields differ from other gateways:
+
+```typescript
+// evolution-webhook key field extraction:
+const instanceName = body.instance?.instanceName
+const event        = body.event                         // "messages.upsert" | "connection.update"
+
+// For messages.upsert:
+const fromPhone    = body.data?.key?.remoteJid?.replace('@s.whatsapp.net', '')
+const fromMe       = body.data?.key?.fromMe             // always check === false
+const text         = body.data?.message?.conversation   // plain text message
+                  ?? body.data?.message?.extendedTextMessage?.text  // links/formatted
+
+// For connection.update (state = 'open' means connected):
+const state        = body.data?.state                   // "open" | "close" | "connecting"
+const phone        = body.data?.wuid?.replace('@s.whatsapp.net', '')
+
+// Reply via tenant's own instance token:
+// POST /message/sendText/[instanceName]
+// Headers: { apikey: tenant.whatsapp_instance_token }
+// Body:    { number: fromPhone, text: "..." }
+```
+
+See `evolution-webhook.ts` for the full deployable implementation.
+
+### Step 7.5 — Implement `evolution-create-instance` Edge Function
+
+Key flow: create instance with Global API Key → set webhook → store instance name + token → return QR.
+
+```typescript
+// POST /instance/create  (Global API Key)
+// Body: { instanceName, token: generatedToken, qrcode: true, number: "" }
+// Returns: { hash: { ..., base64: "data:image/png;base64,..." } }
+
+// POST /webhook/set/[instanceName]  (Instance Token)
+// Body: { url, webhook_by_events: true, events: ["MESSAGES_UPSERT","CONNECTION_UPDATE"] }
+```
+
+See `evolution-create-instance.ts` for the full deployable implementation.
+
+### Step 7.6 — Test WhatsApp Flows End-to-End
+
+Test by texting your **MITMAK** number:
+
+| Text | Expected Response |
+|---|---|
+| `JOIN` | Welcome message with welcome_points + currency_name |
+| `BALANCE` | Current points + how many to next reward |
+| `REDEEM` | A geo-claim link valid for 15 minutes |
+| `STOP` | Opt-out confirmation |
+| `hello` (unknown) | Friendly menu with JOIN / BALANCE / REDEEM / STOP |
+
+Also test the tenant flow:
+1. Connect a tenant's WhatsApp via Settings → Connect WhatsApp
+2. QR appears → scan → "✅ Connected!" appears within 10 seconds
+3. Text `JOIN` to that number → welcome message arrives from the tenant's own number
+
+# Flavourly OS — Execution Plan
+**Build Environment:** Lovable (React + Supabase native integration)  
+**Approach:** Sequential phases — complete and test each phase before moving to the next.  
+**Convention:** Each phase has a Supabase SQL block and a Lovable Prompt. Run SQL first, then prompt Lovable.
+
+---
+
+## Pre-Flight Checklist
+
+Before writing a single line of code:
+
+- [ ] Create a Supabase project at [supabase.com](https://supabase.com) — save the Project URL and anon key
+- [ ] Create a Lovable project — connect it to your Supabase project via Lovable's native integration
+- [ ] Confirm Evolution API is live: `GET https://bankbook-whatsapp-my-evolution-api.onrender.com/instance/fetchInstances` with header `apikey: BankBook_Secret_99`
+- [ ] Verify MITMAK instance is connected (green) in the Evolution Manager at `https://bankbook-whatsapp-my-evolution-api.onrender.com/manager`
+- [ ] Set all Supabase secrets (see PLAN.md §4)
+- [ ] Have your PayFast Merchant ID, Merchant Key, and Passphrase ready (sandbox first)
+
+---
+
+## Phase 1 — Database Foundation
+**Goal:** Schema, RLS, triggers, and analytics views are live in Supabase.  
+**Time estimate:** 30 minutes
+
+### Step 1.1 — Run the complete schema SQL
+
+Copy the entire SQL block from `PLAN.md §2.1` and run it in:
+`Supabase Dashboard → SQL Editor → New Query → Run`
+
+✅ **Verify:** In Table Editor, you should see: `tenants`, `profiles`, `customers`, `loyalty_transactions`, `campaigns`, `rewards_catalog`, `reward_events`, `prospects`, `broadcast_log`, `webhook_events`
+
+### Step 1.2 — Create the Super Admin user manually
+
+```sql
+-- Run in SQL Editor AFTER creating your account via Supabase Auth Dashboard
+UPDATE profiles
+SET role = 'super_admin'
+WHERE id = '[your-auth-user-id]';
+```
+
+*Get your user ID from: Supabase Dashboard → Authentication → Users*
+
+### Step 1.3 — Enable pg_cron
+
+`Supabase Dashboard → Database → Extensions → Enable pg_cron`
+
+Then run the cron schedule block from `PLAN.md §2.1` (uncomment the cron.schedule call).
+
+### Step 1.4 — Create Storage Buckets
+
+`Supabase Dashboard → Storage → New Bucket`
+- Create `logos` (public: true)
+- Create `qr-codes` (public: true)
+
+✅ **Phase 1 Complete when:** All tables visible, RLS enabled on all tables, super_admin role set, storage buckets created.
+
+---
+
+## Phase 2 — App Shell, Auth & Tenant Onboarding
+**Goal:** Lovable builds the app skeleton, auth flow, and the claim page.  
+**Time estimate:** 1–2 hours
+
+### Lovable Prompt 2A — App Shell & Authentication
+
+```
+Build a multi-tenant SaaS PWA called "Flavourly OS".
+
+Tech: React 18, Vite, Tailwind CSS, Shadcn UI, Supabase JS client. Primary brand color: #FF6B00 (orange). Font: Inter.
+
+APP SHELL:
+- Top navigation bar with the Flavourly logo (left). Add an onDoubleClick listener to the logo element — name this element "flavourly-logo-trigger". For now, just add the event handler, we'll wire the logic in a later phase.
+- Right side of nav: user avatar + tenant business name.
+- Left sidebar navigation with icons: Dashboard, Customers, Promos, Insights, Settings.
+- Sidebar and navbar hide on mobile — use a bottom tab bar instead.
+- All routes are protected: if no Supabase session, redirect to /login.
+
+AUTH PAGES:
+- /login: Email + password login. Clean, centered card. "Welcome back to Flavourly" heading. No signup button (tenants only arrive via /claim).
+- /login should show a subtle "Forgot password?" link.
+
+DATA FETCHING:
+- On app load, fetch the logged-in user's profile from the `profiles` table and their tenant from the `tenants` table (join via profiles.tenant_id).
+- Store tenant context in React Context so all pages can access tenant_id, business_name, currency_name, brand_color, whatsapp_instance_id.
+
+ROUTE GUARDS:
+- /dashboard, /customers, /promos, /insights, /settings: require valid Supabase session.
+- /admin/* routes: require profiles.role === 'super_admin'.
+- /claim/* and /geo-claim/*: fully public, no auth required.
+- If unauthenticated on a protected route: redirect to /login.
+```
+
+### Lovable Prompt 2B — Magic Claim Page
+
+```
+Build two public pages (no auth required):
+
+PAGE 1: /claim/:token
+
+This is the first thing a prospective tenant sees after clicking our WhatsApp outreach message. It must feel premium and personalized.
+
+Fetch the tenant record from Supabase using: SELECT * FROM tenants WHERE claim_token = [token] AND claim_token_used = false AND subscription_status = 'unclaimed'.
+
+If not found: show a clean "This invitation link has expired" page with a contact email.
+
+If found, show:
+- Full-screen gradient background using the tenant's brand_color (default #FF6B00).
+- Large heading: "Welcome, [Business Name]! 🎉"
+- Subheading: "Your WhatsApp [currency_name] Loyalty System is built and ready."
+- A phone mockup (SVG or CSS) showing a mock WhatsApp chat with the business name as the contact.
+- A blurred/preview QR code with the business name watermarked on it (use a placeholder image — we'll make it dynamic later).
+- Below the phone mockup: a password setup form.
+  - Fields: Full Name, Email, Password, Confirm Password.
+  - Button: "Claim Your Free Dashboard →"
+  - On submit: call supabase.auth.signUp({ email, password, options: { data: { full_name, role: 'owner' } } })
+  - Then UPDATE tenants SET claim_token_used = true, subscription_status = 'trial', trial_ends_at = now() + interval '14 days'
+  - Then UPDATE profiles SET tenant_id = [tenant.id]
+  - Redirect to /dashboard with a welcome toast: "🎉 [Business Name] is live! Let's set up your WhatsApp."
+
+PAGE 2: /geo-claim/:event_id
+
+This page is sent to customers via WhatsApp to claim a geo-fenced reward.
+
+On load:
+- Show a loading screen: "Checking your location..."
+- Request browser geolocation: navigator.geolocation.getCurrentPosition(...)
+- Fetch the reward_event by event_id. If status != 'sent' or expires_at < now(): show "This reward has expired."
+- Calculate Haversine distance between user's coords and tenant's location_lat/lng.
+- If within 500m: show "🎉 Reward Unlocked!" with a large QR code (reward_event.claim_token as QR). UPDATE reward_events SET status = 'claimed'.
+- If outside 500m: show "You need to be at [Business Name] to claim this. Come in and show this screen!"
+- If geolocation denied: show instructions with a fallback option to "Check in at the counter" (manual redemption by staff).
+```
+
+✅ **Phase 2 Complete when:** Login works, claim page loads a ghost tenant, password setup creates a profile linked to the tenant, redirect to dashboard works.
+
+---
+
+## Phase 3 — Tenant Core: Dashboard, Customers, Settings
+**Goal:** The three most-used pages are functional.  
+**Time estimate:** 2–3 hours
+
+### Lovable Prompt 3A — Dashboard
+
+```
+Build the /dashboard page for the Tenant (Business Owner).
+
+DESIGN PHILOSOPHY: This should feel like checking a heartbeat — 30 seconds, three numbers, one beautiful QR code. Not a data analysis tool. Big numbers, emojis, white space.
+
+LAYOUT:
+1. TOP BANNER (conditional): If tenant.whatsapp_instance_id is null, show a prominent orange banner: "⚠️ Connect your WhatsApp to go live → [Connect Now button]". This banner links to /settings.
+
+2. QR CODE CARD (hero element):
+   - Large, centered QR code that encodes: wa.me/27[tenant.whatsapp_phone]?text=JOIN
+   - If whatsapp_phone is null, show a placeholder QR with "Connect WhatsApp first"
+   - Below QR: "Download QR Poster (PDF)" button — use jsPDF to generate a printable A5 PDF with the QR code, business name, and "Text JOIN to join our loyalty program" text, in the tenant's brand_color.
+   - "Copy WhatsApp Link" button — copies the wa.me URL to clipboard.
+
+3. TODAY'S STATS (3 cards, side by side on desktop, stacked on mobile):
+   - "New Customers Today" — count of customers created today for this tenant
+   - "Rewards Redeemed" — count of reward_events with status='redeemed' today
+   - "Total Visits Today" — count of loyalty_transactions today with reason='visit'
+   Each card: large number (text-5xl bold), emoji, label. No charts.
+
+4. LIVE FEED (below stats):
+   - Title: "Live Activity"
+   - Real-time list of the last 10 loyalty_transactions for this tenant (Supabase Realtime subscription).
+   - Each entry: "🎉 [customer.name] just joined!" or "🎁 [customer.name] redeemed a reward!"
+   - Animate new entries sliding in from the top.
+   - Empty state: "Quiet right now — share your QR code to get things moving! 🚀"
+```
+
+### Lovable Prompt 3B — Customers CRM
+
+```
+Build the /customers page.
+
+It shows all customers for the current tenant, with full CRUD.
+
+TABLE:
+- Columns: Name, Phone Number, [currency_name] Balance, Visits, Last Seen, Status
+- Status badge: Green "Active" (last_visit < 30 days), Amber "At Risk" (30–60 days), Red "Dormant" (>60 days or never visited)
+- Sortable by: Balance (desc), Last Seen (desc), Visits (desc)
+- Searchable by name or phone number
+- Paginated: 25 per page
+
+CUSTOMER DETAIL PANEL (drawer opens on row click):
+- Customer name (editable), phone (read-only)
+- Full loyalty history: list of loyalty_transactions for this customer (date, reason, points_change)
+- "Award [currency_name]" button: opens a small modal with a number input. On submit: INSERT into loyalty_transactions (reason='manual_staff'), UPDATE customers.points += amount. Show success toast.
+- "Remove Customer" button (red, requires confirmation): sets opted_in = false.
+
+ADD CUSTOMER BUTTON (top right):
+- Opens a modal: "Add Customer Manually"
+- Fields: Phone number (required), Name (optional)
+- On submit: INSERT into customers. Then call the send-campaign Edge Function to send a welcome WhatsApp message via the tenant's instance.
+- Normalize phone number on submit (strip spaces, add 27 prefix if needed).
+
+FILTER TABS above table: All | Active | At Risk | Dormant | VIP (points > 100)
+```
+
+### Lovable Prompt 3C — Settings Page
+
+```
+Build the /settings page. This is the tenant's control room.
+
+SECTION 1: Business Profile
+- Fields: Business Name, Industry (dropdown), Currency Name (editable text — e.g. "Washes", "Stamps"), Brand Color (color picker).
+- Upload Logo: drag-and-drop or click to upload. Store in Supabase Storage bucket 'logos' at path logos/{tenant_id}/logo.{ext}. Show preview.
+- Save button: UPDATE tenants with the new values.
+
+SECTION 2: Connect WhatsApp
+- If NOT connected (whatsapp_instance_id is null):
+  - Show a card: "Connect your business WhatsApp number in 15 seconds."
+  - Step 1: "Get QR Code" button → calls edge function evolution-create-instance → displays returned qr_base64 as <img src="data:image/png;base64,[qr_base64]" />.
+  - QR code auto-refreshes every 40 seconds by re-calling evolution-create-instance (Evolution API QR codes rotate roughly every 45s).
+  - Instructions below QR: "Open WhatsApp on your phone → Settings → Linked Devices → Link a Device → Scan this code."
+  - Subscribe to Supabase Realtime on the tenants table for this tenant's id. When tenants.whatsapp_phone changes from null to a value, show "✅ WhatsApp Connected!" toast and stop polling. This update is triggered automatically by the evolution-webhook Edge Function when Evolution API fires a CONNECTION_UPDATE event with state 'open'.
+
+- If connected (whatsapp_phone is not null):
+  - Show: "✅ Connected: +[whatsapp_phone]"
+  - Show a "Disconnect" button (with confirmation modal). On confirm: call DELETE /instance/delete/[instanceName] via an Edge Function, then clear whatsapp_instance_id, whatsapp_instance_token, and whatsapp_phone in the tenants table.
+
+SECTION 3: Subscription
+- Show current status: "14-Day Free Trial — [X] days remaining" or "Active Subscriber" or "Trial Expired".
+- If trial: show countdown badge and "Upgrade to Keep Going" button.
+- Upgrade button: generates PayFast payment form (client-side, using tenant_id in item_name field). Redirect to PayFast sandbox URL.
+- Pricing: R299/month (Starter) or R499/month (Growth). Show as two cards with feature lists.
+```
+
+✅ **Phase 3 Complete when:** Dashboard QR renders, live feed updates in real time, customer table loads with correct data, add customer sends WhatsApp welcome, settings saves correctly, WhatsApp connect QR displays.
+
+---
+
+## Phase 4 — Campaign Builder & Promos
+**Goal:** The revenue-generating core of the product.  
+**Time estimate:** 2–3 hours
+
+### Lovable Prompt 4A — Promos Page & Campaign Builder
+
+```
+Build the /promos page and /promos/new campaign builder.
+
+/promos (Campaign History):
+- List of all campaigns for this tenant ordered by created_at desc.
+- Table columns: Title, Audience, Sent Count, Redemptions, Est. Revenue (sent_count × 100), Status badge, Date.
+- "New Promo" button (top right, primary orange) → navigates to /promos/new.
+- "Run Again" button on each row → navigates to /promos/new with that campaign's data pre-filled.
+- Empty state: "No promos yet — your customers are waiting! [Create Your First Promo →]"
+
+/promos/new (3-Step Campaign Builder):
+
+STEP 1 — "What's your goal today?"
+Do NOT show a blank text box. Show three large, tappable goal cards:
+  Card 1: 🪑 "Fill My Quiet Hours" — "Bring people in on your slowest days."
+  Card 2: 🔁 "Bring Back Lost Faces" — "Re-engage customers who haven't visited in 30+ days."
+  Card 3: 👑 "Reward My VIPs" — "Surprise your most loyal regulars."
+Selecting a goal advances to Step 2.
+
+STEP 2 — "Pick a message that works"
+Based on the selected goal, show 3 pre-written message templates. Use the tenant's currency_name and business_name as variables. Examples:
+  For "Fill Quiet Hours":
+    - "🌧️ Rain day special at [Business Name]! Come in today for double [currency_name]. Valid until 5pm."
+    - "⚡ Flash Tuesday at [Business Name] — your next [currency_name] is FREE. Today only!"
+  For "Bring Back Lost Faces":
+    - "Hi {{customer_name}}, we miss you at [Business Name]! Here's a free [currency_name] just for coming back this week. 🎁"
+  For "Reward VIPs":
+    - "👑 VIP reward! As one of our top customers at [Business Name], you've unlocked a surprise. Show this message to claim."
+User can click a template to select it, then edit it in a textarea that appears below.
+Allow template variables: {{customer_name}}, {{business_name}}, {{currency_name}}.
+
+STEP 3 — "Who gets this & confirm"
+- Audience Selector:
+  - "Everyone" (all opted-in customers)
+  - "Inactive" (last_visit > 30 days)
+  - "VIPs only" (points > 100)
+  - "New Joiners" (created_at < 7 days)
+- Show audience count dynamically as they select: "Sending to X customers"
+- "Reality Check ROI" box (always visible, cannot be dismissed):
+  Use plain English with the tenant's numbers. Example for "Inactive", 42 customers:
+  "💡 You're sending this to 42 people who haven't visited in 30+ days. Even if 10 return and spend R120 each, that's R1,200 from a message that costs nothing to send. An empty [currency_name] bay earns R0."
+  Vary the text based on audience and currency_name.
+- "Send Promo" button: calls send-campaign Edge Function. Show a progress indicator while sending. On success: redirect to /promos with a success toast.
+
+Show a progress stepper at the top: Step 1 → Step 2 → Step 3.
+Allow going back between steps.
+```
+
+✅ **Phase 4 Complete when:** Goal selection works, templates render with tenant variables, audience count is live, ROI box shows, campaign sends and appears in history with correct sent_count.
+
+---
+
+## Phase 5 — Insights (Smart Advisor)
+**Goal:** Non-technical analytics that coaches and motivates.  
+**Time estimate:** 1–2 hours
+
+### Step 5.1 — Deploy `get-tenant-insights` Edge Function
+
+Create `supabase/functions/get-tenant-insights/index.ts`:
+- Query `vw_campaign_performance` for this tenant
+- Calculate quietest day from `customers.last_visit` weekday distribution
+- Count inactive customers (last_visit > 30 days)
+- Count VIP customers (points > 100)
+- Build the rule-based advice per campaign
+- Return structured JSON
+
+Deploy: `supabase functions deploy get-tenant-insights`
+
+### Lovable Prompt 5A — Insights Page
+
+```
+Build the /insights page. This is the "Business Growth Coach". 
+
+CRITICAL DESIGN RULES:
+- NO charts, graphs, or axes of any kind.
+- ALL numbers in text-4xl or larger, bold.
+- Heavy use of emojis to signal positive/negative.
+- One plain-English sentence under every number explaining what it means.
+- Colors: Green for wins, Amber for improvements, Blue for action items.
+- Tone: "You're doing great! Here's how to do even better."
+
+Fetch data from the get-tenant-insights Edge Function on page load. Show a skeleton loader while loading.
+
+SECTION A — "This Month's Wins" (gradient hero card, orange-to-pink background):
+Three large stat numbers side by side:
+  🎉 [N] Customers Engaged  — "People who received a message or visited this month."
+  🎁 [N] Rewards Redeemed   — "Times a customer used one of your promos."
+  💰 R[N] Estimated Revenue  — "Extra sales your promos helped create (est. R100 per redemption)."
+  Add an info tooltip (?) explaining the R100 estimate.
+
+SECTION B — "🔥 Your Winning Campaigns"
+Top 3 campaigns by redemptions. For each:
+  Card with green left border.
+  Campaign title (bold).
+  "🏆 Top Performer" badge.
+  Large number: "[X] customers redeemed this"
+  Green text: "Brought in an estimated R[X] in extra sales!"
+  "🔁 Run This Again" button → prefill /promos/new with this campaign's message + audience.
+  
+  If no winning campaigns yet: "No campaigns sent yet. [Send Your First Promo →]"
+
+SECTION C — "💡 Let's Do Better Next Time"
+Campaigns with redemption_rate_pct < 5 from the last 30 days. For each:
+  Card with amber left border.
+  Campaign title.
+  "📉 Needs Improvement" badge.
+  "Only [X] out of [Y] customers used this."
+  The "Coach's Advice" box (gray background, 🧠 icon):
+    - Pull advice_text from the Edge Function response.
+    - Example texts already built into the Edge Function (rule-based).
+  "✨ Try a Better Version" button → opens /promos/new with the suggested_template pre-loaded.
+  
+  If all campaigns performed well: "Everything's working well. Keep it up! 🌟"
+
+SECTION D — "🚀 What You Should Do This Week"
+Three action cards (blue theme):
+  Card 1 — Fill Quiet Hours:
+    Title: "🪑 Fill Your Quiet [weekday]s"
+    Body: "Your [quietest_day]s are [pct]% quieter than your busiest day."
+    Button: "Send a [Quietest Day] Flash Sale" → /promos/new with off-peak template, audience=all.
+  
+  Card 2 — Bring Back Lost Customers:
+    Title: "👋 Bring Back [inactive_count] Lost Customers"
+    Body: "[inactive_count] customers haven't visited in 30+ days."
+    Button: "Send a 'We Miss You' Promo" → /promos/new with winback template, audience=inactive.
+  
+  Card 3 — Reward VIPs:
+    Title: "👑 Surprise Your [vip_count] VIPs"
+    Body: "[vip_count] loyal customers deserve some love."
+    Button: "Send a VIP-Only Treat" → /promos/new with vip template, audience=vip.
+    
+  If counts are 0 for any card, show: "No [inactive/VIP] customers yet — keep growing your list!"
+```
+
+✅ **Phase 5 Complete when:** Insights page loads real campaign data, winning campaigns show with correct redemption counts, advice boxes show rule-based text, action buttons pre-fill the campaign builder correctly.
+
+---
+
+## Phase 6 — Super Admin Growth Engine
+**Goal:** Hidden acquisition system for bulk prospect onboarding.  
+**Time estimate:** 2–3 hours
+
+### Step 6.1 — Deploy Backend Functions
+
+```bash
+supabase functions new ingest-leads
+supabase functions new send-prospect-pitch
+supabase functions new admin-broadcast
+
+supabase functions deploy ingest-leads --no-verify-jwt
+supabase functions deploy send-prospect-pitch
+supabase functions deploy admin-broadcast
+```
+
+### Lovable Prompt 6A — Super Admin Easter Egg + Routing
+
+```
+Wire the Super Admin "Easter Egg" navigation.
+
+1. Find the "flavourly-logo-trigger" element in the app shell (added in Phase 2).
+2. Add the onDoubleClick handler logic:
+   - Check the current user's profile.role from the tenant context.
+   - If role === 'super_admin': navigate to /admin/prospects.
+   - If not super_admin: show a subtle toast notification with just a "👀" emoji, nothing else. No error message. No indication that a Super Admin panel exists.
+
+3. Create the /admin/prospects page (protected: super_admin only).
+4. Create the /admin/broadcasts page (protected: super_admin only).
+5. Create the /admin/webhooks page (protected: super_admin only).
+
+All three pages should share a secondary side navigation:
+  - "Prospects" (icon: Users)
+  - "Broadcasts" (icon: Megaphone)
+  - "Webhooks" (icon: Activity)
+  
+This secondary nav should have a subtle dark theme to distinguish it from the tenant UI.
+```
+
+### Lovable Prompt 6B — CSV Ingestion Engine
+
+```
+Build the CSV upload feature on the /admin/prospects page.
+
+PROSPECTS TABLE:
+- Columns: Business Name, Owner Name, Phone, Location, Industry, Status (badge: new/invited/claimed/active), Invite Sent, Actions.
+- Status badges: new=gray, invited=blue, claimed=amber, active=green.
+- Search bar + filter by Industry and Status.
+- Bulk select checkboxes.
+- When rows are selected: "Send WhatsApp Invite ([N] selected)" button appears in a bottom action bar.
+
+"UPLOAD LEADS" BUTTON (top right, prominent):
+Opens a 4-step modal (use Shadcn Dialog):
+
+Step 1 — Industry Selection:
+  - Heading: "What industry is this list for?"
+  - Required dropdown: Restaurant, Cafe, Car Wash, Salon, Barber, Retail.
+  - Small help text: "This sets the loyalty currency for all businesses in this file."
+  - Cannot advance without selecting.
+
+Step 2 — File Upload:
+  - Drag-and-drop zone accepting .csv and .xlsx files.
+  - Use PapaParse for CSV parsing and SheetJS (xlsx library) for Excel.
+  - Show file name and row count after upload.
+
+Step 3 — Column Mapping:
+  - Show a preview table of the first 3 rows from the file.
+  - For each of our 4 required fields (business_name, owner_name, phone_number, location), show a dropdown letting the user select which column maps to it.
+  - Auto-detect and pre-select obvious matches (e.g., if CSV has a "Business Name" column, auto-map it).
+  - phone_number is required. Others are optional.
+
+Step 4 — Confirm & Ingest:
+  - Summary: "Ready to generate [N] profiles for [Industry] businesses."
+  - "Generate Profiles" button.
+  - On click: chunk data into batches of 50, POST each batch to the ingest-leads Edge Function.
+  - Show a progress bar: "Generating profiles... [X]/[N]"
+  - On complete: close modal, refresh prospects table, show toast: "[N] profiles created and ready to invite!"
+
+SEND INVITE FLOW:
+- When "Send WhatsApp Invite" is clicked on selected rows:
+  - Show a confirmation modal: "Send invite to [N] businesses? This will send a WhatsApp message from your superadmin number."
+  - On confirm: call send-prospect-pitch Edge Function for each selected prospect (batch with delay).
+  - Show progress toast. Update prospect status to 'invited' as each sends.
+```
+
+### Lovable Prompt 6C — Broadcasts & Webhooks
+
+```
+Build /admin/broadcasts and /admin/webhooks pages.
+
+/admin/broadcasts:
+  SEND BROADCAST FORM:
+  - "Target Industry" dropdown: All, Restaurant, Car Wash, Salon, Barber, Cafe, Retail.
+  - Message textarea with variable hints shown below: {{business_name}}, {{owner_name}}, {{currency_name}}.
+  - Live character count.
+  - "Preview Audience" button: fetches count of active tenants matching the industry filter. Shows "X active [industry] businesses will receive this."
+  - "Send Broadcast" button: calls admin-broadcast Edge Function. Show progress.
+  
+  BROADCAST HISTORY (below form):
+  - Table of past broadcasts: Date, Industry Target, Recipient Count, Message Preview (first 80 chars), Sent By.
+  - Sorted by date desc.
+
+/admin/webhooks:
+  - Real-time table of webhook_events ordered by created_at desc.
+  - Columns: Time (relative), Instance, Event Type, Phone, Message (truncated 60 chars), Status badge.
+  - Status badges: processed=green, error=red, ignored=gray.
+  - "Retry" button on error rows → re-triggers processing for that event.
+  - Filter bar: Instance name, Status, Date range.
+  - Auto-refreshes via Supabase Realtime subscription on webhook_events INSERT.
+  - Shows last 200 events. "Load More" pagination.
+  - Summary cards at top: "Today: [N] processed, [N] errors, [N] ignored."
+```
+
+✅ **Phase 6 Complete when:** Double-clicking logo navigates to /admin/prospects for super_admin user, CSV upload creates ghost tenant records in the database, WhatsApp invites send via MITMAK instance, broadcasts send and log correctly.
+
+---
+
+## Phase 7 — Evolution API & WhatsApp Edge Functions
+**Goal:** Inbound WhatsApp keyword handling and campaign delivery work end-to-end.  
+**Time estimate:** 2–3 hours
+
+### Step 7.1 — Deploy WhatsApp Functions
+
+```bash
+supabase functions new evolution-webhook
+supabase functions new evolution-create-instance
+supabase functions new send-campaign
+
+supabase functions deploy evolution-webhook --no-verify-jwt
+supabase functions deploy evolution-create-instance
+supabase functions deploy send-campaign
+```
+
+### Step 7.2 — Set Evolution API Supabase Secrets
+
+```bash
+supabase secrets set \
+  EVOLUTION_API_URL="https://bankbook-whatsapp-my-evolution-api.onrender.com" \
+  EVOLUTION_GLOBAL_API_KEY="BankBook_Secret_99" \
+  EVOLUTION_INSTANCE_NAME="MITMAK" \
+  EVOLUTION_INSTANCE_TOKEN="92A86AB4FC59-47E2-88CE-685D70228D34" \
+  APP_URL="https://[your-lovable-app-url].lovable.app"
+```
+
+> `APP_URL` is used by `evolution-webhook` to build geo-claim links. Set it to your Lovable project URL.
+
+### Step 7.3 — Configure MITMAK Webhook in Evolution Manager
+
+1. Log into Evolution Manager at `https://bankbook-whatsapp-my-evolution-api.onrender.com/manager`
+2. Select the **MITMAK** instance → Settings → Webhooks
+3. Set Webhook URL: `https://[YOUR_SUPABASE_PROJECT_ID].supabase.co/functions/v1/evolution-webhook`
+4. Enable events: `MESSAGES_UPSERT`, `CONNECTION_UPDATE`
+5. Toggle on: **Webhook by Events**
+6. Click Save — confirm MITMAK status is **Connected** (green)
+
+If the Supabase URL changes later, update the webhook URL here and in all tenant instances via the Evolution Manager.
+
+### Step 7.4 — Implement `evolution-webhook` Edge Function
+
+The full implementation is in `evolution-webhook.ts`. Key field differences from other gateways:
+
+```typescript
+// Evolution API payload fields:
+const instanceName = body.instance?.instanceName          // tenant lookup key
+const event        = body.event                           // "messages.upsert" | "connection.update"
+
+// Inbound message:
+const fromPhone = body.data?.key?.remoteJid
+                  ?.replace('@s.whatsapp.net', '')        // clean phone number
+const fromMe    = body.data?.key?.fromMe                  // MUST check === false
+const text      = body.data?.message?.conversation        // plain text
+               ?? body.data?.message?.extendedTextMessage?.text  // formatted/links
+
+// Connection confirmed (instance linked):
+const state = body.data?.state                            // "open" = connected
+const phone = body.data?.wuid?.replace('@s.whatsapp.net', '') // tenant's WA number
+
+// Send reply — uses tenant's own instance token, NOT the global key:
+POST /message/sendText/[instanceName]
+Headers: { apikey: tenant.whatsapp_instance_token }
+Body:    { number: fromPhone, text: "..." }
+```
+
+Copy `evolution-webhook.ts` into `supabase/functions/evolution-webhook/index.ts`.
+
+### Step 7.5 — Implement `evolution-create-instance` Edge Function
+
+The full implementation is in `evolution-create-instance.ts`. Key flow:
+
+```typescript
+// 1. Create instance (Global API Key):
+POST /instance/create
+Headers: { apikey: EVOLUTION_GLOBAL_API_KEY }
+Body:    { instanceName, token: generatedToken, qrcode: true, number: "" }
+
+// 2. Set webhook (Instance Token):
+POST /webhook/set/[instanceName]
+Headers: { apikey: instanceToken }
+Body:    { url: webhookUrl, webhook_by_events: true,
+           events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE"] }
+
+// 3. Fetch QR code (Instance Token):
+GET /instance/connect/[instanceName]
+Headers: { apikey: instanceToken }
+// Returns: { base64: "data:image/png;base64,..." }
+```
+
+Copy `evolution-create-instance.ts` into `supabase/functions/evolution-create-instance/index.ts`.
+
+### Step 7.6 — Update Lovable Settings Page Prompt (WhatsApp Connect)
+
+Add this clarification to the Settings page Lovable prompt from Phase 3C:
+
+```
+Update the "Connect WhatsApp" section in /settings:
+
+- The "Get QR Code" button calls the waha-create-session Edge Function (not evolution-create-instance).
+- Display the returned qr_base64 as an <img src="data:image/png;base64,[qr_base64]" /> element.
+- Subscribe to Supabase Realtime on the tenants table, filtering for the current tenant's id.
+  - When tenants.whatsapp_phone changes from null to a value, show "✅ Connected: +[phone]" and stop polling.
+- Re-call evolution-create-instance every 40 seconds to fetch a fresh QR image (Evolution API QR codes rotate every ~45s).
+  - Stop polling once connected or after 5 minutes (show "QR expired — try again" message).
+```
+
+### Step 7.7 — Test WhatsApp Flows End-to-End
+
+Test each keyword handler by texting your `superadmin` number:
+
+| Text | Expected Response |
+|---|---|
+| `JOIN` | Welcome message with welcome_points + currency_name |
+| `BALANCE` | Current points + how many to next reward |
+| `REDEEM` | A geo-claim link valid for 15 minutes |
+| `STOP` | Opt-out confirmation |
+| `hello` (unknown) | Friendly menu with JOIN / BALANCE / REDEEM / STOP |
+
+Also test the tenant flow:
+1. Connect a tenant's WhatsApp number via Settings → Connect WhatsApp
+2. QR appears → scan with a test phone → "✅ Connected!" appears within 10 seconds
+3. Text `JOIN` to the tenant's number → welcome message arrives
+
+---
+
+## Phase 8 — PayFast Subscription Billing
+**Goal:** Tenants can upgrade from trial to an active recurring monthly subscription, with production-grade signature validation.  
+**Time estimate:** 3–4 hours  
+**Read first:** `PAYFAST_INTEGRATION.md` — this phase implements what's documented there. Don't skip it; PayFast's signature scheme has a sharp edge (two different algorithms depending on which product you're calling) and the doc explains exactly which one applies here.
+
+### Step 8.1 — Add the `payment_transactions` Table
+
+Run this in Supabase SQL Editor (also included in the main schema block in `PLAN.md §2.1` if you're running this project fresh — skip if you already ran the full schema):
+
+```sql
+create table if not exists payment_transactions (
+  id             uuid primary key default uuid_generate_v4(),
+  tenant_id      uuid references tenants(id) on delete cascade,
+  plan           text check (plan in ('starter','growth')),
+  amount         numeric(10,2) not null,
+  m_payment_id   text not null,
+  pf_payment_id  text,
+  payfast_token  text,
+  status         text default 'pending'
+                 check (status in ('pending','complete','failed','cancelled')),
+  raw_itn        jsonb,
+  created_at     timestamptz default now(),
+  updated_at     timestamptz default now()
+);
+create index if not exists idx_payment_tx_tenant on payment_transactions(tenant_id);
+create unique index if not exists idx_payment_tx_mpid on payment_transactions(m_payment_id);
+
+alter table payment_transactions enable row level security;
+
+create policy "payment_tx_tenant_read" on payment_transactions for select using (
+  tenant_id in (select tenant_id from profiles where id = auth.uid())
+  or exists (select 1 from profiles where id = auth.uid() and role = 'super_admin')
+);
+```
+
+This table is what makes the ITN handler idempotent and tamper-resistant — without it you can't verify the amount PayFast confirms actually matches what you charged.
+
+### Step 8.2 — Get Your PayFast Sandbox Credentials
+
+1. Sign up at [sandbox.payfast.co.za](https://sandbox.payfast.co.za) if you haven't
+2. Note your sandbox Merchant ID and Merchant Key from the dashboard
+3. **Set a passphrase** — go to Settings → Security Passphrase. This is mandatory: recurring billing will not work without one, and PayFast will reject subscription checkouts silently if it's missing.
+4. Sandbox and production have **separate** credentials — never reuse sandbox values in production secrets.
+
+### Step 8.3 — Set Supabase Secrets
+
+```bash
+supabase secrets set \
+  PAYFAST_MERCHANT_ID="[sandbox-merchant-id]" \
+  PAYFAST_MERCHANT_KEY="[sandbox-merchant-key]" \
+  PAYFAST_PASSPHRASE="[your-sandbox-passphrase]" \
+  PAYFAST_MODE="sandbox"
+```
+
+`PAYFAST_MODE` is what both functions read to pick between `sandbox.payfast.co.za` and `www.payfast.co.za` — this is the only thing you change when going live (Step 8.9).
+
+### Step 8.4 — Deploy Both PayFast Functions
+
+```bash
+mkdir -p supabase/functions/payfast-checkout
+mkdir -p supabase/functions/payfast-itn
+
+cp payfast-checkout.ts supabase/functions/payfast-checkout/index.ts
+cp payfast-itn.ts       supabase/functions/payfast-itn/index.ts
+
+supabase functions deploy payfast-checkout
+supabase functions deploy payfast-itn --no-verify-jwt
+```
+
+`payfast-checkout` requires auth (a logged-in tenant calls it). `payfast-itn` does not — PayFast calls it directly with no Supabase auth token, so `--no-verify-jwt` is required or every ITN will be rejected with a 401.
+
+### Step 8.5 — Confirm the ITN Endpoint Is Publicly Reachable
+
+PayFast cannot reach an endpoint that requires auth or is behind a firewall. Verify:
+
+```bash
+curl -X POST https://[YOUR_PROJECT_ID].supabase.co/functions/v1/payfast-itn \
+  -d "test=1"
+```
+
+You should get a response (even an error response is fine — a timeout or connection refused means PayFast will never be able to notify you of a payment).
+
+### Step 8.6 — Lovable Prompt: Billing & Upgrade UI
+
+```
+Build the billing/upgrade flow in /settings and two new return pages.
+
+SECTION: Subscription (in /settings, replacing any placeholder)
+- Fetch the tenant's subscription_status and trial_ends_at.
+- If status = 'trial':
+  - Show days remaining: "Free Trial — X days left"
+  - If X <= 5, show this in amber with urgency styling
+  - Show two plan cards side by side:
+    Card 1 "Starter" — R299/month — "Up to 500 customers" — [Upgrade to Starter]
+    Card 2 "Growth"  — R499/month — "Unlimited customers + automations" — [Upgrade to Growth]
+- If status = 'active':
+  - Show "✅ You're subscribed" with the current plan name
+  - Show "Manage Billing" — for now this can just be a mailto: or WhatsApp link to contact support for changes (self-service cancel/change is a later phase)
+- If status = 'cancelled':
+  - Show "Your subscription ended. [Reactivate →]" — reactivate goes through the same upgrade flow as a fresh checkout.
+
+UPGRADE BUTTON BEHAVIOUR:
+- On click, call the payfast-checkout Edge Function with { plan: 'starter' | 'growth' }.
+- The function returns { payfast_url, fields, signature, m_payment_id }.
+- Build a hidden HTML form with one <input type="hidden"> per field in `fields`, plus one for `signature`.
+- Set the form's action to `payfast_url` and method to POST.
+- Programmatically submit the form immediately (this navigates the browser to PayFast's checkout page).
+- Show a brief "Redirecting to secure checkout..." loading state while this happens.
+
+RETURN PAGES:
+- /settings?upgrade=success → show a success toast: "🎉 Payment received! Your subscription is being activated — this usually takes a few seconds." Then poll the tenants table (Supabase Realtime) for subscription_status to flip to 'active', and update the UI live when it does.
+- /settings?upgrade=cancelled → show a neutral message: "Checkout cancelled — no charge was made. You can try again anytime."
+
+IMPORTANT: Do not optimistically mark the subscription as active on the frontend after redirect — the real activation only happens when the payfast-itn Edge Function processes the server-to-server notification, which can take a few seconds after the redirect. Always reflect the actual tenants.subscription_status from the database, never assume success from the URL parameter alone.
+```
+
+### Step 8.7 — Test the Full Sandbox Flow
+
+1. Click "Upgrade to Starter" in Settings
+2. You should be redirected to `sandbox.payfast.co.za`
+3. PayFast's sandbox uses a dummy wallet — no real card needed, just confirm the payment on their test screen
+4. You'll be redirected back to `/settings?upgrade=success`
+5. Within a few seconds, `payment_transactions.status` should flip to `complete` and `tenants.subscription_status` should flip to `active` — confirm both in Supabase Table Editor
+6. Confirm the UI updates live to show "✅ You're subscribed"
+
+### Step 8.8 — Test the Security Checks Deliberately
+
+Don't skip this — it's the difference between a working integration and a silent vulnerability:
+
+| Test | How | Expected result |
+|---|---|---|
+| Tampered amount | In `payment_transactions`, manually change `amount` to a different value right after clicking Upgrade but before completing sandbox payment | ITN should log an amount mismatch and set `status = 'failed'`, tenant stays on trial |
+| Wrong source IP | Manually POST to your `payfast-itn` URL from your own machine with a fabricated but correctly-signed payload | Should be rejected at the IP check — confirm via function logs |
+| Bad signature | POST to `payfast-itn` with a random `signature` value | Should be rejected immediately, no DB writes |
+| Repeat ITN | Re-send the same successful ITN payload a second time (PayFast sandbox lets you resend from their dashboard) | Should log "repeat charge confirmed" and not error, not double-process |
+
+Check function logs for all of these: `supabase functions logs payfast-itn`
+
+### Step 8.9 — Go Live
+
+When you're confident the sandbox flow is solid:
+
+```bash
+supabase secrets set \
+  PAYFAST_MERCHANT_ID="[production-merchant-id]" \
+  PAYFAST_MERCHANT_KEY="[production-merchant-key]" \
+  PAYFAST_PASSPHRASE="[production-passphrase]" \
+  PAYFAST_MODE="live"
+```
+
+That's it — no code changes. Both functions read `PAYFAST_MODE` to switch hosts. Test with one real small payment (PayFast minimum is R5.00 — you can temporarily add a test plan for this) before announcing billing is live to real tenants.
+
+---
+
+## Phase 9 — Polish, PWA & Production Hardening
+**Goal:** Production-ready quality. Works offline, installs as a home-screen app.  
+**Time estimate:** 2–3 hours
+
+### Lovable Prompt 9A — Trial Expiry & Error States
+
+```
+Add these production-ready UI elements:
+
+1. TRIAL EXPIRY BANNER:
+   - If subscription_status = 'trial' AND trial_ends_at is within 5 days: 
+     Show a persistent amber banner at the top of all pages: "Your free trial ends in [X] days. [Upgrade Now →]"
+   - If trial_ends_at has passed AND status is still 'trial':
+     Block campaign sending. Show: "Trial expired. Upgrade to keep sending promos. [Upgrade →]"
+     Dashboard and Customers pages remain readable.
+
+2. ERROR STATES:
+   - If Evolution API instance creation fails (WhatsApp connect): "Could not connect. Check your internet and try again."
+   - If campaign send partially fails: show how many sent successfully and which failed.
+   - If Supabase query errors: show a toast with "Something went wrong. Please refresh." — never show raw error text.
+
+3. EMPTY STATES (for new tenants with no data yet):
+   - /customers: Illustration + "No customers yet. Share your QR code to get started!"
+   - /promos: Illustration + "No promos sent yet. [Create Your First Promo →]"
+   - /insights: "Send your first promo to start seeing insights here."
+
+4. LOADING STATES:
+   - All data-heavy pages: skeleton loaders (Shadcn Skeleton), not spinners.
+   - Buttons that trigger async actions: show a spinner inside the button and disable it while loading.
+
+5. PWA CONFIG:
+   - Add a manifest.json: name "Flavourly OS", short_name "Flavourly", theme_color "#FF6B00", background_color "#ffffff", display "standalone".
+   - Set appropriate icons (192px and 512px).
+   - Ensure the app is installable on mobile (add to home screen prompt).
+```
+
+### Lovable Prompt 9B — Mobile Optimization
+
+```
+Ensure the entire app works perfectly on mobile devices (phones are the primary device for business owners).
+
+Audit and fix:
+1. The QR code on the Dashboard must be large enough to scan from a distance (min 200×200px on mobile).
+2. The Customer table on mobile: collapse to a card list view instead of a horizontal table. Show name, points balance, and last visit only. Tap card to open detail drawer.
+3. The Campaign builder steps: ensure each step is fully visible without horizontal scrolling.
+4. The bottom tab bar on mobile: Dashboard, Customers, Promos, Insights, Settings.
+5. All input fields: font-size minimum 16px to prevent iOS auto-zoom.
+6. Touch targets: minimum 44×44px for all buttons and tappable elements.
+7. The Claim page (/claim/:token): must look beautiful on mobile — this is the first impression.
+```
+
+✅ **Phase 9 Complete when:** Trial banner shows correctly, PayFast upgrade flow works end-to-end, all empty/error/loading states look polished, app installs as PWA on mobile.
+
+---
+
+## Testing Checklist (Pre-Launch)
+
+### Database & Auth
+- [ ] RLS verified: login as Tenant A, confirm you cannot see Tenant B's customers
+- [ ] Super admin double-click easter egg works; non-admins see 👀 toast only
+- [ ] Claim page creates profile correctly linked to ghost tenant
+- [ ] Trial expiry date calculates correctly on claim
+
+### WhatsApp Flows
+- [ ] `JOIN` creates customer + sends welcome with correct currency_name
+- [ ] `BALANCE` returns correct points
+- [ ] `REDEEM` sends a valid geo-claim link
+- [ ] `STOP` opt-out works and prevents future messages
+- [ ] Campaign send rate-limits correctly (no WhatsApp ban)
+- [ ] evolution-webhook correctly resolves tenant from `instance.instanceName` field in payload
+- [ ] CONNECTION_UPDATE state='open' event updates tenants.whatsapp_phone correctly
+
+### Super Admin
+- [ ] CSV upload with 50 rows creates 50 prospect + ghost tenant records
+- [ ] Phone normalization handles `083`, `+27 83`, `27 83` correctly
+- [ ] Invite sends via MITMAK instance with correct claim URL
+- [ ] Broadcast sends to correct industry filter
+
+### Billing
+- [ ] PayFast sandbox payment completes
+- [ ] ITN webhook received and validated
+- [ ] Tenant status updates to 'active' after payment
+- [ ] Expired trial blocks campaign sending
+
+---
+
+## Go-Live Checklist
+
+- [ ] Switch `PAYFAST_MODE` secret from `sandbox` to `live`, and swap in production Merchant ID/Key/Passphrase
+- [ ] Confirm Evolution API on Render is running and MITMAK instance is connected (green)
+- [ ] Confirm all tenant instance webhooks point to the production Supabase evolution-webhook URL
+- [ ] Confirm MITMAK instance is connected and linked to founder number
+- [ ] Set up pg_cron daily churn calculation
+- [ ] Configure Supabase backup schedule
+- [ ] Enable Supabase connection pooling (for scale)
+- [ ] Add a custom domain to Lovable project
+- [ ] Set up Sentry or similar for error monitoring
+- [ ] Load test with 1,000 simulated customers

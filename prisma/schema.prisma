@@ -1,0 +1,228 @@
+// Flavourly OS — Prisma schema
+// WhatsApp-native customer retention & loyalty OS for Southern African SMEs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Core: Tenants (businesses) ──────────────────────────────────────────────
+model Tenant {
+  id                     String                @id @default(cuid())
+  name                   String
+  slug                   String                @unique
+  industry               String                @default("restaurant") // restaurant|cafe|carwash|salon|barber|retail
+  currencyName           String                @default("Points") // Points|Stamps|Washes|Visits|Cuts
+  brandColor             String                @default("#FF6B00")
+  logoUrl                String?
+  welcomePoints          Int                   @default(10)
+  rewardThreshold        Int                   @default(10)
+  subscriptionStatus     String                @default("trial") // unclaimed|trial|active|paused|cancelled
+  trialEndsAt            DateTime?
+  plan                   String                @default("starter") // starter|growth
+  locationLat            Float?
+  locationLng            Float?
+  locationLabel          String?
+  // WhatsApp / Evolution API
+  whatsappInstanceId     String?               @unique
+  whatsappInstanceToken  String?
+  whatsappPhone          String?
+  whatsappConnectedAt    DateTime?
+  // Public claim flow (prospect onboarding)
+  claimToken             String                @unique @default(cuid())
+  claimedAt              DateTime?
+  ownerName              String?
+  ownerEmail             String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  customers              Customer[]
+  campaigns              Campaign[]
+  rewardEvents           RewardEvent[]
+  activities             Activity[]
+  loyaltyTransactions    LoyaltyTransaction[]
+  webhookEvents          WebhookEvent[]
+  paymentTransactions    PaymentTransaction[]
+  broadcastRecipients    BroadcastRecipient[]
+  prospect               Prospect?
+}
+
+// ─── Customers (end-users on WhatsApp) ───────────────────────────────────────
+model Customer {
+  id              String              @id @default(cuid())
+  tenantId        String
+  phoneNumber     String
+  name            String?
+  points          Int                 @default(0)
+  visits          Int                 @default(0)
+  lastVisit       DateTime?
+  optedIn         Boolean             @default(true)
+  joinedAt        DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  loyaltyTxns     LoyaltyTransaction[]
+  rewardEvents    RewardEvent[]
+  activities      Activity[]
+
+  @@unique([tenantId, phoneNumber])
+  @@index([tenantId])
+}
+
+// ─── Loyalty ledger (immutable) ──────────────────────────────────────────────
+model LoyaltyTransaction {
+  id            String   @id @default(cuid())
+  tenantId      String
+  customerId    String
+  pointsChange  Int      // +earn / -redeem
+  reason        String   // join_bonus|visit|manual_staff|redeem|campaign_bonus|adjustment
+  note          String?
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId])
+}
+
+// ─── Campaigns (promos sent to audiences) ────────────────────────────────────
+model Campaign {
+  id              String    @id @default(cuid())
+  tenantId        String
+  title           String
+  goal            String    // quiet_hours|winback|vip|general
+  message         String
+  audience        String    // all|inactive|vip|new
+  status          String    @default("draft") // draft|sending|sent|failed
+  sentCount       Int       @default(0)
+  redemptionCount Int       @default(0)
+  sentAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, sentAt])
+}
+
+// ─── Reward events (REDEEM → geo-claim link) ─────────────────────────────────
+model RewardEvent {
+  id           String    @id @default(cuid())
+  tenantId     String
+  customerId   String
+  triggerType  String    @default("manual") // manual|geo|campaign
+  status       String    @default("sent")   // sent|claimed|expired
+  pointsCost   Int       @default(0)
+  expiresAt    DateTime?
+  claimedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId])
+}
+
+// ─── Activity feed ───────────────────────────────────────────────────────────
+model Activity {
+  id          String   @id @default(cuid())
+  tenantId    String
+  type        String   // joined|redeemed|earned|visit|campaign_sent|added
+  customerId  String?
+  customerName String?
+  message     String
+  meta        String?  // JSON string for extras
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
+
+// ─── Webhook events log (Evolution API inbound) ──────────────────────────────
+model WebhookEvent {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  instanceName   String
+  eventType      String
+  phoneNumber    String?
+  messageContent String?
+  status         String   @default("processed") // processed|error|ignored
+  rawPayload     String   // JSON string
+  createdAt      DateTime @default(now())
+
+  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([instanceName, createdAt])
+  @@index([status])
+}
+
+// ─── Super Admin: Prospects (pre-claim businesses) ───────────────────────────
+model Prospect {
+  id            String    @id @default(cuid())
+  businessName  String
+  ownerName     String?
+  phoneNumber   String
+  location      String?
+  industry      String    @default("restaurant")
+  status        String    @default("new") // new|invited|claimed|active
+  tenantId      String?   @unique
+  inviteSentAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([industry])
+}
+
+// ─── Platform broadcasts (super admin → tenants) ─────────────────────────────
+model BroadcastLog {
+  id             String   @id @default(cuid())
+  targetIndustry String   @default("all")
+  messagePreview String
+  recipientCount Int      @default(0)
+  sentCount      Int      @default(0)
+  sentBy         String   @default("super_admin")
+  createdAt      DateTime @default(now())
+
+  recipients     BroadcastRecipient[]
+}
+
+model BroadcastRecipient {
+  id           String       @id @default(cuid())
+  broadcastId  String
+  tenantId     String
+  delivered    Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+
+  broadcast    BroadcastLog @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([broadcastId])
+}
+
+// ─── PayFast billing ─────────────────────────────────────────────────────────
+model PaymentTransaction {
+  id            String    @id @default(cuid())
+  tenantId      String
+  plan          String    // starter|growth
+  amount        Float
+  mPaymentId    String    @unique
+  pfPaymentId   String?
+  payfastToken  String?
+  status        String    @default("pending") // pending|complete|failed|cancelled
+  rawItn        String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
