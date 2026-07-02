@@ -10,9 +10,9 @@ import {
   setWebhook,
   getConnectionState,
 } from "@/lib/evolution";
+import { getAppUrl } from "@/lib/app-url";
 
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
-const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 
 // POST /api/whatsapp/connect — creates/fetches an Evolution API instance + QR code
 export async function POST(req: NextRequest) {
@@ -77,11 +77,11 @@ export async function POST(req: NextRequest) {
     });
 
     // Set the webhook URL on this instance so it forwards to our app
-    const webhookUrl = `${APP_URL}/api/webhooks`;
+    const webhookUrl = `${getAppUrl()}/api/webhooks`;
     await setWebhook(instanceName, instanceToken, webhookUrl);
   } else if (forceRefresh) {
     // Already has a token — just set the webhook again to make sure
-    const webhookUrl = `${APP_URL}/api/webhooks`;
+    const webhookUrl = `${getAppUrl()}/api/webhooks`;
     await setWebhook(instanceName, instanceToken, webhookUrl);
   }
 

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "bun run build",
+  "installCommand": "bun install",
+  "env": {
+    "NEXTAUTH_URL": "@nextauth-url",
+    "NEXTAUTH_SECRET": "@nextauth-secret",
+    "DATABASE_URL": "@database-url",
+    "DIRECT_URL": "@direct-url",
+    "NEXT_PUBLIC_SUPABASE_URL": "@supabase-url",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "@supabase-publishable-key",
+    "SUPABASE_SECRET_KEY": "@supabase-secret-key",
+    "EVOLUTION_API_URL": "@evolution-api-url",
+    "EVOLUTION_GLOBAL_API_KEY": "@evolution-global-key",
+    "EVOLUTION_INSTANCE_NAME": "@evolution-instance-name",
+    "EVOLUTION_INSTANCE_TOKEN": "@evolution-instance-token",
+    "PAYFAST_MERCHANT_ID": "@payfast-merchant-id",
+    "PAYFAST_MERCHANT_KEY": "@payfast-merchant-key",
+    "PAYFAST_PASSPHRASE": "@payfast-passphrase",
+    "PAYFAST_MODE": "@payfast-mode",
+    "APP_URL": "@app-url"
+  },
+  "functions": {
+    "src/app/api/**/*.ts": {
+      "maxDuration": 60
+    }
+  }
+}

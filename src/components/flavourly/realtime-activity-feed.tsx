@@ -40,7 +40,7 @@ interface Props {
  * message + relative time) so the lead agent can drop this in as a 1:1 swap.
  */
 export function RealtimeActivityFeed({ tenantId }: Props) {
-  const { items, connected } = useRealtimeActivity(tenantId);
+  const { items, connected, usingFallback } = useRealtimeActivity(tenantId);
 
   return (
     <div>
@@ -48,7 +48,7 @@ export function RealtimeActivityFeed({ tenantId }: Props) {
         emoji="🔴"
         title="Live Activity"
         subtitle="What your customers are doing right now"
-        action={<LiveBadge connected={connected} />}
+        action={<LiveBadge connected={connected} usingFallback={usingFallback} />}
       />
       <Card className="overflow-hidden">
         {items.length === 0 ? (
@@ -88,14 +88,15 @@ export function RealtimeActivityFeed({ tenantId }: Props) {
   );
 }
 
-function LiveBadge({ connected }: { connected: boolean }) {
+function LiveBadge({ connected, usingFallback }: { connected: boolean; usingFallback?: boolean }) {
+  const isLive = connected || usingFallback;
   return (
     <span
       role="status"
       aria-live="polite"
       className={
         "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap " +
-        (connected
+        (isLive
           ? "bg-success-light text-success-foreground"
           : "bg-error-light text-error-foreground")
       }
@@ -103,11 +104,11 @@ function LiveBadge({ connected }: { connected: boolean }) {
       <span
         className={
           "w-2 h-2 rounded-full " +
-          (connected ? "bg-success animate-pulse" : "bg-error")
+          (isLive ? "bg-success animate-pulse" : "bg-error")
         }
         aria-hidden
       />
-      {connected ? "Live" : "Disconnected"}
+      {connected ? "Live" : usingFallback ? "Live · Polling" : "Disconnected"}
     </span>
   );
 }

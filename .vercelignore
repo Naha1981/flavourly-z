@@ -1,0 +1,12 @@
+# Don't deploy these to Vercel
+mini-services/
+db/
+*.log
+dev.log
+realtime-service.log
+server.log
+screenshot-*.png
+agent-ctx/
+worklog.md
+prisma/seed.ts
+DEPLOYMENT.md

@@ -3,10 +3,10 @@ import { db } from "@/lib/db";
 import { rateLimit, validateBody } from "@/lib/middleware";
 import { prospectInviteSchema } from "@/lib/validation";
 import { sendWhatsAppText } from "@/lib/evolution";
+import { getAppUrl } from "@/lib/app-url";
 
 const EVOLUTION_INSTANCE_NAME = process.env.EVOLUTION_INSTANCE_NAME;
 const EVOLUTION_INSTANCE_TOKEN = process.env.EVOLUTION_INSTANCE_TOKEN;
-const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 
 // POST /api/prospects/invite — send WhatsApp invites to selected prospects
 // via the Flavourly-os (MITMAK) Evolution API instance.
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    const claimUrl = `${APP_URL}/claim/${prospect.tenant.claimToken}`;
+    const claimUrl = `${getAppUrl()}/claim/${prospect.tenant.claimToken}`;
     const ownerName = prospect.ownerName ?? "there";
     const message =
       `Hi ${ownerName} 👋\n\n` +

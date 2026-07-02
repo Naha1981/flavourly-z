@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/middleware";
+import { getAppUrl } from "@/lib/app-url";
 
 // GET /api/webhooks?instance=&eventType=&status=&limit=
 export async function GET(req: NextRequest) {
@@ -222,7 +223,7 @@ export async function POST(req: NextRequest) {
             expiresAt,
           },
         });
-        const claimUrl = `${process.env.APP_URL ?? "http://localhost:3000"}/geo-claim/${rewardEvent.id}`;
+        const claimUrl = `${getAppUrl()}/geo-claim/${rewardEvent.id}`;
         reply =
           `🎁 Your reward is ready!\n\n` +
           `Click the link — you need to be at ${tenant.name} to unlock it:\n` +
