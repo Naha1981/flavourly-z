@@ -6,9 +6,13 @@ import { db } from "@/lib/db";
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 }, // 30 days
+  // trustHost is REQUIRED on Vercel — without it, NextAuth v4 throws
+  // "There is a problem with the server configuration" because it can't
+  // determine the host. This auto-detects from the request headers.
+  trustHost: true,
   pages: {
     // We use overlay-based auth (no separate login page), but NextAuth
-    // needs a fallback. Points to "/" which renders the app shell.
+    // needs a fallback. Points to "/" which renders the landing page.
     signIn: "/",
   },
   providers: [
@@ -57,13 +61,18 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.userId = user.id;
         token.email = user.email;
-        // Fetch profile for role + tenantId
-        const profile = await db.profile.findUnique({
-          where: { userId: user.id },
-        });
-        if (profile) {
-          token.role = profile.role;
-          token.tenantId = profile.tenantId;
+        // Fetch profile for role + tenantId — wrap in try/catch so
+        // a DB hiccup doesn't crash the entire auth flow.
+        try {
+          const profile = await db.profile.findUnique({
+            where: { userId: user.id },
+          });
+          if (profile) {
+            token.role = profile.role;
+            token.tenantId = profile.tenantId;
+          }
+        } catch (err) {
+          console.error("[auth] JWT profile fetch error:", err);
         }
       }
       return token;
