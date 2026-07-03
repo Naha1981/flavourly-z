@@ -42,14 +42,32 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
 
-  // Evolution API sends: { event, instance: { instanceName }, data: { ... } }
-  // Also support flat shape: { event, instanceName, data }
-  const event = body.event as string | undefined;
+  // Evolution API v2.3.7 can send events in multiple formats:
+  // Format 1: { event, instance: { instanceName }, data: { ... } }
+  // Format 2: { event, instanceName, data }
+  // Format 3: { event, instance: { name }, data }
+  // We normalize to instanceName + data.
+  const event =
+    (body.event as string | undefined) ??
+    (body.type as string | undefined) ??
+    null;
   const instanceName =
-    (body.instance as Record<string, string> | undefined)?.instanceName ?? body.instanceName;
-  const data = body.data as Record<string, unknown> | undefined;
+    (body.instance as Record<string, string> | undefined)?.instanceName ??
+    (body.instance as Record<string, string> | undefined)?.name ??
+    body.instanceName ??
+    null;
+  const data = (body.data as Record<string, unknown> | undefined) ?? body;
 
   if (!event || !instanceName) {
+    // Log unknown-format payloads so we can debug
+    await db.webhookEvent.create({
+      data: {
+        instanceName: "unknown",
+        eventType: event ?? "unknown",
+        status: "ignored",
+        rawPayload: JSON.stringify(body).slice(0, 2000),
+      },
+    });
     return NextResponse.json({ error: "Missing event or instanceName" }, { status: 400 });
   }
 
@@ -102,16 +120,20 @@ export async function POST(req: NextRequest) {
     const remoteJid =
       (key?.remoteJid as string) ??
       (key?.participant as string) ??
+      (data?.from as string) ??
       null;
     const phone = remoteJid?.replace("@s.whatsapp.net", "").replace(/[^0-9]/g, "") ?? null;
 
-    // Extract message text — handle plain text, extended text, and other formats
+    // Extract message text — handle all Evolution API v2.3.7 message formats
     const msg = data?.message as Record<string, unknown> | undefined;
     const rawText =
       (msg?.conversation as string) ??
       (msg?.extendedTextMessage as Record<string, string>)?.text ??
       (msg?.imageMessage as Record<string, string>)?.caption ??
       (msg?.videoMessage as Record<string, string>)?.caption ??
+      (data?.text as string) ??
+      (data?.body as string) ??
+      (data?.message as string) ??
       "";
     const text = rawText.trim().toLowerCase();
 
