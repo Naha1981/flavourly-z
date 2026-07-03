@@ -93,11 +93,17 @@ export function normalizeZAPhone(raw: string): string {
   return stripped;
 }
 
-export function formatPhone(phone: string): string {
+export function formatPhone(phone: string | null | undefined): string {
+  if (!phone) return "—";
   if (phone.startsWith("27") && phone.length === 11) {
     return `+27 ${phone.slice(2, 4)} ${phone.slice(4, 7)} ${phone.slice(7)}`;
   }
   return phone;
+}
+
+export function waMeUrl(phone: string | null | undefined, text: string): string {
+  const clean = phone ?? "";
+  return `https://wa.me/${clean}?text=${encodeURIComponent(text)}`;
 }
 
 export function toSlug(name: string): string {
@@ -106,10 +112,6 @@ export function toSlug(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
-}
-
-export function waMeUrl(phone: string, text: string): string {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
 }
 
 // Substitute {{customer_name}} {{business_name}} {{currency_name}} etc.
